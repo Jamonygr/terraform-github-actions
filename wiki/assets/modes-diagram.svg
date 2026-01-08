@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="360" viewBox="0 0 1000 360">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 22px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 15px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1000" height="360" />
+  <text class="title" x="30" y="45">Pipeline Modes</text>
+
+  <rect class="box" x="40" y="120" width="220" height="90" />
+  <text class="label" x="60" y="150">Router</text>
+  <text class="sub" x="60" y="172">Mode: single / matrix / drift</text>
+
+  <rect class="box" x="360" y="60" width="220" height="80" />
+  <text class="label" x="380" y="90">Single</text>
+  <text class="sub" x="380" y="110">Plan + Apply + Destroy</text>
+
+  <rect class="box" x="360" y="150" width="220" height="80" />
+  <text class="label" x="380" y="180">Matrix</text>
+  <text class="sub" x="380" y="200">Multi-env plan/apply</text>
+
+  <rect class="box" x="360" y="240" width="220" height="80" />
+  <text class="label" x="380" y="270">Drift</text>
+  <text class="sub" x="380" y="290">Scheduled refresh-only</text>
+
+  <rect class="box" x="700" y="60" width="240" height="80" />
+  <text class="label" x="720" y="90">Outputs</text>
+  <text class="sub" x="720" y="110">Artifacts, PR comments, metrics</text>
+
+  <rect class="box" x="700" y="150" width="240" height="80" />
+  <text class="label" x="720" y="180">Notifications</text>
+  <text class="sub" x="720" y="200">Slack / Teams / Discord</text>
+
+  <rect class="box" x="700" y="240" width="240" height="80" />
+  <text class="label" x="720" y="270">Issues</text>
+  <text class="sub" x="720" y="290">Drift issues on demand</text>
+
+  <line class="line" x1="260" y1="165" x2="360" y2="100" />
+  <line class="line" x1="260" y1="165" x2="360" y2="190" />
+  <line class="line" x1="260" y1="165" x2="360" y2="280" />
+
+  <line class="line" x1="580" y1="100" x2="700" y2="100" />
+  <line class="line" x1="580" y1="190" x2="700" y2="190" />
+  <line class="line" x1="580" y1="280" x2="700" y2="280" />
+</svg>

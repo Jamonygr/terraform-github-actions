@@ -12,6 +12,7 @@ Reusable GitHub Actions for Terraform workflows. Includes plan, apply, validate,
 
 - [Features](#-features)
 - [Quick Start](#-quick-start)
+- [Documentation](#-documentation)
 - [Actions Reference](#-actions-reference)
 - [Workflow Example](#-workflow-example)
 - [Pipeline Stages](#-pipeline-stages)
@@ -101,6 +102,22 @@ git add .
 git commit -m "Add Terraform GitHub Actions"
 git push
 ```
+
+---
+
+## 📚 Documentation
+
+Full documentation is available in the repo wiki folder. Start here:
+
+- [Wiki Home](wiki/Home.md)
+- [Getting Started](wiki/Getting-Started.md)
+- [Workflow Modes](wiki/Workflow-Modes.md)
+- [Pipeline Stages](wiki/Pipeline-Stages.md)
+- [Actions Reference](wiki/Actions-Reference.md)
+
+![Pipeline overview](wiki/assets/pipeline-overview.svg)
+
+![Modes diagram](wiki/assets/modes-diagram.svg)
 
 ---
 
@@ -449,6 +466,12 @@ terraform-github-actions/
 │   │
 │   └── SETUP.md               # Detailed setup guide
 │
+├── wiki/                     # Documentation wiki
+│   ├── Home.md                # Wiki landing page
+│   ├── Pipeline-Stages.md     # Stage-by-stage details
+│   ├── Actions-Reference.md   # Actions catalog
+│   ├── Troubleshooting.md     # Common issues
+│   ├── assets/                # Diagrams and images
 └── README.md                  # This file
 ```
 
@@ -459,6 +482,7 @@ terraform-github-actions/
 | `terraform.yml` | Main workflow orchestrating all stages |
 | `SETUP.md` | Step-by-step Azure and GitHub setup |
 | `actions/*/action.yml` | Individual composite actions |
+| `wiki/` | Local wiki documentation and diagrams |
 
 ---
 

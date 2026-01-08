@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="360" viewBox="0 0 1000 360">
+  <defs>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 22px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1000" height="360" />
+  <text class="title" x="30" y="45">Authentication Options</text>
+
+  <rect class="box" x="60" y="90" width="380" height="220" />
+  <text class="label" x="90" y="125">OIDC (Recommended)</text>
+  <text class="sub" x="90" y="150">- Short-lived tokens</text>
+  <text class="sub" x="90" y="170">- No secrets to rotate</text>
+  <text class="sub" x="90" y="190">- Azure AD federated credentials</text>
+  <text class="sub" x="90" y="210">- Set USE_OIDC=true</text>
+  <text class="sub" x="90" y="230">- Use AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID</text>
+
+  <rect class="box" x="560" y="90" width="380" height="220" />
+  <text class="label" x="590" y="125">Service Principal (Legacy)</text>
+  <text class="sub" x="590" y="150">- Long-lived credentials</text>
+  <text class="sub" x="590" y="170">- Rotate regularly</text>
+  <text class="sub" x="590" y="190">- Store AZURE_CREDENTIALS secret</text>
+  <text class="sub" x="590" y="210">- Supported for backward compatibility</text>
+</svg>

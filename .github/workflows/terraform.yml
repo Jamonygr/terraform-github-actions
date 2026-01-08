@@ -141,7 +141,7 @@ jobs:
   # STAGE 0: MODE ROUTER - Determines which jobs to run
   # =========================================================================
   router:
-    name: '🔀 Route Pipeline'
+    name: 'Route Pipeline'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -178,7 +178,7 @@ jobs:
   # STAGE 0B: REPO HYGIENE (Optional)
   # =========================================================================
   repo-hygiene:
-    name: '0?? Repo Hygiene'
+    name: 'Repo Hygiene'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: router
@@ -228,7 +228,7 @@ jobs:
   # STAGE 1: FORMAT CHECK (Skip for drift mode)
   # =========================================================================
   format:
-    name: '1️⃣ Format Check'
+    name: '1. Format Check'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: router
@@ -256,7 +256,7 @@ jobs:
   # STAGE 2: VALIDATE (Skip for drift mode)
   # =========================================================================
   validate:
-    name: '2️⃣ Validate'
+    name: '2. Validate'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, format]
@@ -281,7 +281,7 @@ jobs:
   # STAGE 2B: TERRAFORM TESTS (Skip for drift mode)
   # =========================================================================
   terraform-tests:
-    name: '2?? Terraform Tests'
+    name: '2a. Terraform Tests'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -318,7 +318,7 @@ jobs:
   # STAGE 2C: MODULE CONTRACT CHECKS (Optional)
   # =========================================================================
   module-contracts:
-    name: '2?? Module Contracts'
+    name: '2b. Module Contracts'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, validate]
@@ -389,7 +389,7 @@ jobs:
   # STAGE 3: SECURITY - TFSEC (Skip for drift mode)
   # =========================================================================
   security-tfsec:
-    name: '3️⃣ Security - tfsec'
+    name: '3. Security - tfsec'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -429,7 +429,7 @@ jobs:
   # STAGE 3: SECURITY - CHECKOV (Skip for drift mode)
   # =========================================================================
   security-checkov:
-    name: '3️⃣ Security - Checkov'
+    name: '3a. Security - Checkov'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -460,7 +460,7 @@ jobs:
   # STAGE 3: SECURITY - TERRASCAN (Optional)
   # =========================================================================
   security-terrascan:
-    name: '3?? Security - Terrascan'
+    name: '3b. Security - Terrascan'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -509,7 +509,7 @@ jobs:
   # STAGE 3: SECRET SCANNING (Skip for drift mode)
   # =========================================================================
   secret-scan:
-    name: '3️⃣ Security - Secrets'
+    name: '3c. Security - Secrets'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -525,7 +525,7 @@ jobs:
   # STAGE 3: SHELLCHECK - Script Security (Skip for drift mode)
   # =========================================================================
   shellcheck:
-    name: '3️⃣ Security - Scripts'
+    name: '3d. Security - Scripts'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, validate]
@@ -575,7 +575,7 @@ jobs:
   # STAGE 4: TFLINT (Skip for drift mode)
   # =========================================================================
   tflint:
-    name: '4️⃣ Lint - TFLint'
+    name: '4. Lint - TFLint'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -606,7 +606,7 @@ jobs:
   # STAGE 4: POLICY CHECK (Skip for drift mode)
   # =========================================================================
   policy-check:
-    name: '4️⃣ Lint - Policy'
+    name: '4a. Lint - Policy'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, validate]
@@ -634,7 +634,7 @@ jobs:
   # STAGE 4: TERRAFORM DOCS (Skip for drift mode)
   # =========================================================================
   terraform-docs:
-    name: '4️⃣ Lint - Docs'
+    name: '4b. Lint - Docs'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, validate]
@@ -653,7 +653,7 @@ jobs:
   # STAGE 4B: TERRAFORM DOCS CHECK (Optional)
   # =========================================================================
   docs-check:
-    name: '4?? Docs Check'
+    name: '4c. Docs Check'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, validate]
@@ -694,7 +694,7 @@ jobs:
   # STAGE 5: GRAPH VISUALIZATION (Skip for drift mode)
   # =========================================================================
   graph:
-    name: '5️⃣ Analysis - Graph'
+    name: '5. Analysis - Graph'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, security-tfsec, security-checkov, security-terrascan, secret-scan, shellcheck, tflint, policy-check]
@@ -717,7 +717,7 @@ jobs:
   # STAGE 5: MODULE VERSION CHECK (Skip for drift mode)
   # =========================================================================
   module-versions:
-    name: '5️⃣ Analysis - Versions'
+    name: '5a. Analysis - Module Versions'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, security-tfsec, security-checkov, security-terrascan, secret-scan, shellcheck, tflint, policy-check]
@@ -743,7 +743,7 @@ jobs:
   # STAGE 6: COST ESTIMATION (Skip for drift mode)
   # =========================================================================
   cost-estimate:
-    name: '6️⃣ Analysis - Cost'
+    name: '6. Analysis - Cost'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [router, graph, module-versions, terraform-tests, module-contracts, docs-check]
@@ -775,7 +775,7 @@ jobs:
   # STAGE 6B: VERSION CHECK (Skip for drift mode)
   # =========================================================================
   version-check:
-    name: '6️⃣ Analysis - Versions'
+    name: '6a. Analysis - Provider Versions'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, graph, module-versions]
@@ -796,7 +796,7 @@ jobs:
   # STAGE 7: PLAN (Skip for drift mode - uses drift-detect instead)
   # =========================================================================
   plan:
-    name: '7️⃣ Plan'
+    name: '7. Plan'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [router, graph, module-versions, terraform-tests, module-contracts, docs-check]
@@ -863,7 +863,7 @@ jobs:
   # STAGE 7A: TAGGING AUDIT (Optional)
   # =========================================================================
   tag-audit:
-    name: '7?? Tag Audit'
+    name: '7a. Tag Audit'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, plan]
@@ -936,7 +936,7 @@ jobs:
   # STAGE 7B: INTEGRATION TESTS (PR only)
   # =========================================================================
   integration-tests:
-    name: '🧪 Integration Tests'
+    name: '7d. Integration Tests'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: plan
@@ -963,7 +963,7 @@ jobs:
   # STAGE 7C: EPHEMERAL PR ENVIRONMENT (Optional)
   # =========================================================================
   ephemeral-env:
-    name: '7?? Ephemeral PR Environment'
+    name: '7b. Ephemeral PR Environment'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [router, plan]
@@ -1074,7 +1074,7 @@ jobs:
   # STAGE 7D: CANARY APPLY (Optional, before prod)
   # =========================================================================
   canary:
-    name: '7?? Canary Apply'
+    name: '7c. Canary Apply'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [router, plan]
@@ -1170,7 +1170,7 @@ jobs:
   # STAGE 8: APPLY (Single environment mode only)
   # =========================================================================
   apply:
-    name: '8️⃣ Apply'
+    name: '8. Apply'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [router, plan, cost-estimate, tag-audit, canary]
@@ -1395,7 +1395,7 @@ jobs:
   # STAGE 10: METRICS (After single-env apply)
   # =========================================================================
   metrics:
-    name: '🔟 Metrics'
+    name: '10. Metrics'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [router, apply, plan]
@@ -1419,7 +1419,7 @@ jobs:
   # STAGE 9: DESTROY (Single environment mode only, with Approval Gate)
   # =========================================================================
   destroy:
-    name: '9️⃣ Destroy'
+    name: '9. Destroy'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [router, plan]
@@ -1504,7 +1504,7 @@ jobs:
   # DRIFT: Detection Matrix (scheduled or manual drift mode)
   # =========================================================================
   drift-detect:
-    name: '🔍 Drift - ${{ matrix.environment }}'
+    name: 'Drift Detection - ${{ matrix.environment }}'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: router
@@ -1546,7 +1546,7 @@ jobs:
   # DRIFT: Notification Summary
   # =========================================================================
   drift-notify:
-    name: '📢 Drift Summary'
+    name: 'Drift Summary'
     runs-on: ubuntu-latest
     needs: [router, drift-detect]
     if: always() && needs.router.outputs.is_drift == 'true'
@@ -1597,7 +1597,7 @@ jobs:
   # MATRIX: Plan for each environment
   # =========================================================================
   matrix-plan:
-    name: '📋 Matrix Plan - ${{ matrix.environment }}'
+    name: 'Matrix Plan - ${{ matrix.environment }}'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [router, validate, terraform-tests, module-contracts, docs-check, security-tfsec, security-checkov, security-terrascan, secret-scan, shellcheck, tflint, policy-check]
@@ -1632,7 +1632,7 @@ jobs:
   # MATRIX: Apply dev first
   # =========================================================================
   matrix-apply-dev:
-    name: '🚀 Matrix Apply - dev'
+    name: 'Matrix Apply - dev'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [router, matrix-plan]
@@ -1666,7 +1666,7 @@ jobs:
   # MATRIX: Apply staging after dev
   # =========================================================================
   matrix-apply-staging:
-    name: '🚀 Matrix Apply - staging'
+    name: 'Matrix Apply - staging'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [router, matrix-plan, matrix-apply-dev]
@@ -1702,7 +1702,7 @@ jobs:
   # MATRIX: Apply prod after staging
   # =========================================================================
   matrix-apply-prod:
-    name: '🚀 Matrix Apply - prod'
+    name: 'Matrix Apply - prod'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [router, matrix-plan, matrix-apply-staging]
@@ -1738,7 +1738,7 @@ jobs:
   # MATRIX: Summary Notification
   # =========================================================================
   matrix-notify:
-    name: '📢 Matrix Summary'
+    name: 'Matrix Summary'
     runs-on: ubuntu-latest
     needs: [router, matrix-apply-dev, matrix-apply-staging, matrix-apply-prod]
     if: always() && needs.router.outputs.is_matrix == 'true'

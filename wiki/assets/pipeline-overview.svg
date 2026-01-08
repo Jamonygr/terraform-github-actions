@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="420" />
+  <text class="title" x="40" y="50">Terraform Pipeline Overview</text>
+
+  <!-- Row 1 -->
+  <rect class="box" x="40" y="90" width="180" height="70" />
+  <text class="label" x="60" y="120">Format</text>
+  <text class="sub" x="60" y="142">terraform fmt</text>
+
+  <rect class="box" x="250" y="90" width="180" height="70" />
+  <text class="label" x="270" y="120">Validate</text>
+  <text class="sub" x="270" y="142">terraform validate</text>
+
+  <rect class="box" x="460" y="90" width="180" height="70" />
+  <text class="label" x="480" y="120">Security</text>
+  <text class="sub" x="480" y="142">tfsec / checkov / terrascan</text>
+
+  <rect class="box" x="670" y="90" width="180" height="70" />
+  <text class="label" x="690" y="120">Lint + Docs</text>
+  <text class="sub" x="690" y="142">tflint / docs check</text>
+
+  <rect class="box" x="880" y="90" width="180" height="70" />
+  <text class="label" x="900" y="120">Tests</text>
+  <text class="sub" x="900" y="142">terraform test / terratest</text>
+
+  <!-- Row 2 -->
+  <rect class="box" x="40" y="230" width="180" height="70" />
+  <text class="label" x="60" y="260">Plan</text>
+  <text class="sub" x="60" y="282">detailed exit codes</text>
+
+  <rect class="box" x="250" y="230" width="180" height="70" />
+  <text class="label" x="270" y="260">Cost + Tags</text>
+  <text class="sub" x="270" y="282">infracost / tag audit</text>
+
+  <rect class="box" x="460" y="230" width="180" height="70" />
+  <text class="label" x="480" y="260">Apply</text>
+  <text class="sub" x="480" y="282">env gates / canary</text>
+
+  <rect class="box" x="670" y="230" width="180" height="70" />
+  <text class="label" x="690" y="260">Destroy</text>
+  <text class="sub" x="690" y="282">confirm + backup</text>
+
+  <rect class="box" x="880" y="230" width="180" height="70" />
+  <text class="label" x="900" y="260">Drift + Metrics</text>
+  <text class="sub" x="900" y="282">schedule / audit</text>
+
+  <!-- Arrows Row 1 -->
+  <line class="line" x1="220" y1="125" x2="250" y2="125" />
+  <line class="line" x1="430" y1="125" x2="460" y2="125" />
+  <line class="line" x1="640" y1="125" x2="670" y2="125" />
+  <line class="line" x1="850" y1="125" x2="880" y2="125" />
+
+  <!-- Arrow down to Row 2 -->
+  <line class="line" x1="970" y1="160" x2="970" y2="230" />
+
+  <!-- Arrows Row 2 -->
+  <line class="line" x1="220" y1="265" x2="250" y2="265" />
+  <line class="line" x1="430" y1="265" x2="460" y2="265" />
+  <line class="line" x1="640" y1="265" x2="670" y2="265" />
+  <line class="line" x1="850" y1="265" x2="880" y2="265" />
+</svg>
