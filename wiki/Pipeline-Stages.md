@@ -16,7 +16,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 
 ![Drift detection loop](assets/drift-loop.svg)
 
-## Core stages (always on)
+## Core stages
 
 | Stage | Job | Purpose |
 |------|-----|---------|
@@ -32,12 +32,12 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 4 | `terraform-docs` | Generates docs artifacts |
 | 5 | `graph` | Dependency graph output |
 | 5 | `module-versions` | Provider/module version report |
-| 6 | `cost-estimate` | Infracost summary |
+| 6 | `cost-estimate` | Infracost summary (single mode only) |
 | 6 | `version-check` | Terraform/provider update checks |
-| 7 | `plan` | Terraform plan output and PR comment |
+| 7 | `plan` | Terraform plan output and PR comment (single mode only) |
 | 8 | `apply` | Apply in single mode (manual) |
 | 9 | `destroy` | Destroy in single mode (manual) |
-| 10 | `metrics` | Post-apply metrics and audit summary |
+| 10 | `metrics` | Post-apply metrics and audit summary (single mode only) |
 
 ## Optional stages (enable with variables)
 
@@ -49,6 +49,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 3 | `security-terrascan` | `ENABLE_TERRASCAN=true` | Terrascan SARIF upload |
 | 4 | `docs-check` | `DOCS_ENFORCE=true` | Fails if terraform-docs output changed |
 | 7 | `tag-audit` | `REQUIRED_TAG_KEYS` set | Verifies required tag keys in plan |
+| 7 | `integration-tests` | PR only | Terratest execution (soft fail) |
 | 7 | `canary` | `ENABLE_CANARY=true` and prod target | Canary apply before prod apply |
 | 7 | `ephemeral-env` | `ENABLE_EPHEMERAL_ENV=true` | PR-only ephemeral apply + destroy |
 

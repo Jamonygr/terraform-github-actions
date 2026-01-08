@@ -260,50 +260,29 @@ jobs:
 
 ## 🔄 Pipeline Stages
 
-The included workflow (`terraform.yml`) implements a comprehensive 10-stage pipeline:
+The unified workflow (`terraform.yml`) supports single, matrix, and drift modes. High-level view:
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        TERRAFORM PIPELINE                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  1️⃣ FORMAT CHECK ──► 2️⃣ VALIDATE ──► 3️⃣ SECURITY (tfsec)           │
-│         │                  │                │                       │
-│         ▼                  ▼                ▼                       │
-│  4️⃣ SECURITY ──────► 5️⃣ SECRET ────► 6️⃣ COST ESTIMATE              │
-│    (Checkov)           SCAN               │                         │
-│         │                                 ▼                         │
-│         └────────────────────────► 7️⃣ PLAN ◄───────────────────    │
-│                                       │                             │
-│                                       ▼                             │
-│                              8️⃣ APPROVAL GATE                       │
-│                                       │                             │
-│                          ┌────────────┴────────────┐                │
-│                          ▼                         ▼                │
-│                     9️⃣ APPLY                 10️⃣ DESTROY            │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+![Pipeline overview](wiki/assets/pipeline-overview.svg)
 
 ### Stage Details
 
-| Stage | Job Name | Purpose | Blocking |
-|-------|----------|---------|----------|
-| 1 | `format` | Check Terraform formatting | ✅ Yes |
-| 2 | `validate` | Validate configuration syntax | ✅ Yes |
-| 3 | `security-tfsec` | tfsec security scan | ❌ No |
-| 4 | `security-checkov` | Checkov compliance scan | ❌ No |
-| 5 | `secret-scan` | Detect hardcoded secrets | ❌ No |
-| 6 | `cost-estimate` | Infracost estimation | ❌ No |
-| 7 | `plan` | Generate execution plan | ✅ Yes |
-| 8 | `approval` | Manual approval gate | ✅ Yes (prod) |
-| 9 | `apply` | Apply infrastructure changes | - |
-| 10 | `destroy` | Destroy infrastructure | - |
+| Stage | Job(s) | Purpose | Notes |
+|-------|--------|---------|-------|
+| 0 | `router` | Select mode (single, matrix, drift) | `repo-hygiene` optional |
+| 1 | `format` | Enforce `terraform fmt` | Blocking |
+| 2 | `validate` | Validate configuration | Blocking |
+| 3 | Security suite | tfsec, Checkov, secret scan, ShellCheck | Terrascan optional |
+| 4 | Lint and policy | TFLint, policy checks, terraform-docs | Docs check optional |
+| 5 | Analysis | Graph + module versions | Always on |
+| 6 | Cost and versions | Infracost + provider checks | Cost is single mode only |
+| 7 | `plan` | Plan + PR comment + blast radius | Single mode only |
+| 8 | `apply` | Manual apply | Environment gates |
+| 9 | `destroy` | Manual destroy + confirm | Environment gates |
+| 10 | `metrics` | Post-apply reporting | Single mode only |
 
-Additional optional stages (enabled via repository variables) include Terraform tests, module contract checks, terraform-docs enforcement, Terrascan scans, tag audits, canary apply, ephemeral PR environments, and repo hygiene checks.
+Optional post-plan actions include tag audit, Terratest PR integration tests, ephemeral PR environments, and canary apply. See [Pipeline Stages](wiki/Pipeline-Stages.md) for the full list and mode-specific jobs (matrix and drift).
 
 ---
-
 ## ⚙️ Configuration
 
 ### Workflow Inputs
