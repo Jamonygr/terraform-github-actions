@@ -22,25 +22,32 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       run: |
-        # Remove any existing terraform state to start fresh
-        rm -rf .terraform .terraform.lock.hcl
+        # Create temporary directory for graph generation (preserve existing .terraform)
+        GRAPH_TEMP=$(mktemp -d)
+        echo "Using temp directory: $GRAPH_TEMP"
         
-        # Temporarily remove backend configuration to allow graph generation
-        if [ -f backend.tf ]; then
-          mv backend.tf backend.tf.bak
-        fi
+        # Copy Terraform files to temp (excluding state and providers)
+        find . -name '*.tf' -exec cp --parents {} "$GRAPH_TEMP/" \; 2>/dev/null || true
         
-        # Initialize without any backend
-        terraform init
+        # Move to temp directory
+        cd "$GRAPH_TEMP"
+        
+        # Remove backend configuration for local graph generation
+        sed -i '/^terraform {/,/^}/{ /backend/,/}/d }' *.tf 2>/dev/null || true
+        
+        # Initialize without backend
+        terraform init -backend=false -input=false
         
         # Generate the graph
         terraform graph > graph.dot
         dot -T${{ inputs.output_format }} graph.dot -o terraform-graph.${{ inputs.output_format }}
         
-        # Restore backend file
-        if [ -f backend.tf.bak ]; then
-          mv backend.tf.bak backend.tf
-        fi
+        # Copy result back to original directory
+        cp terraform-graph.${{ inputs.output_format }} "$OLDPWD/"
+        cp graph.dot "$OLDPWD/"
+        
+        # Cleanup temp
+        rm -rf "$GRAPH_TEMP"
         
         echo "## 🗺️ Infrastructure Graph" >> $GITHUB_STEP_SUMMARY
         echo "Graph generated successfully. Download from artifacts." >> $GITHUB_STEP_SUMMARY

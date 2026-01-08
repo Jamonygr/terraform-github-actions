@@ -16,6 +16,27 @@ inputs:
     description: 'Currency for cost display'
     required: false
     default: 'USD'
+  # Cost Threshold Alerting
+  cost_threshold:
+    description: 'Monthly cost threshold to trigger warning (e.g., 100)'
+    required: false
+    default: ''
+  cost_increase_threshold:
+    description: 'Cost increase threshold to trigger warning (e.g., 50)'
+    required: false
+    default: ''
+  fail_on_threshold:
+    description: 'Fail workflow if threshold exceeded'
+    required: false
+    default: 'false'
+  # Baseline comparison
+  baseline_file:
+    description: 'Path to baseline cost file for comparison'
+    required: false
+  save_baseline:
+    description: 'Save current cost as baseline'
+    required: false
+    default: 'false'
 
 outputs:
   monthly_cost:
@@ -24,6 +45,12 @@ outputs:
   diff:
     description: 'Cost difference from baseline'
     value: ${{ steps.cost.outputs.diff }}
+  threshold_exceeded:
+    description: 'Whether cost threshold was exceeded'
+    value: ${{ steps.threshold.outputs.exceeded }}
+  increase_amount:
+    description: 'Cost increase amount from baseline'
+    value: ${{ steps.compare.outputs.increase }}
 
 runs:
   using: 'composite'
@@ -37,6 +64,15 @@ runs:
         else
           echo "enabled=false" >> "$GITHUB_OUTPUT"
         fi
+
+    - name: Restore Baseline Cache
+      if: steps.gate.outputs.enabled == 'true' && inputs.baseline_file == ''
+      uses: actions/cache@v4
+      with:
+        path: /tmp/infracost-baseline.json
+        key: infracost-baseline-${{ github.repository }}-${{ github.base_ref || 'main' }}
+        restore-keys: |
+          infracost-baseline-${{ github.repository }}-
 
     - name: Setup Infracost
       if: steps.gate.outputs.enabled == 'true'
@@ -56,15 +92,95 @@ runs:
           --format json \
           --out-file /tmp/infracost.json
         
-        MONTHLY=$(jq -r '.totalMonthlyCost' /tmp/infracost.json)
+        MONTHLY=$(jq -r '.totalMonthlyCost // "0"' /tmp/infracost.json)
         echo "monthly_cost=$MONTHLY" >> $GITHUB_OUTPUT
         
         echo "## 💰 Cost Estimation" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Estimated Monthly Cost:** \$$MONTHLY ${{ inputs.currency }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         infracost breakdown \
           --path . \
           --terraform-var-file=${{ inputs.var_file }} \
           --format table >> $GITHUB_STEP_SUMMARY
+
+    - name: Compare with Baseline
+      id: compare
+      if: steps.gate.outputs.enabled == 'true'
+      shell: bash
+      run: |
+        CURRENT="${{ steps.cost.outputs.monthly_cost }}"
+        BASELINE_FILE="${{ inputs.baseline_file }}"
+        
+        if [ -z "$BASELINE_FILE" ]; then
+          BASELINE_FILE="/tmp/infracost-baseline.json"
+        fi
+        
+        if [ -f "$BASELINE_FILE" ]; then
+          BASELINE=$(jq -r '.totalMonthlyCost // "0"' "$BASELINE_FILE")
+          INCREASE=$(echo "$CURRENT - $BASELINE" | bc 2>/dev/null || echo "0")
+          PERCENT=$(echo "scale=2; ($INCREASE / ($BASELINE + 0.01)) * 100" | bc 2>/dev/null || echo "0")
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Cost Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Previous | \$$BASELINE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Current | \$$CURRENT |" >> $GITHUB_STEP_SUMMARY
+          echo "| Change | \$$INCREASE ($PERCENT%) |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "increase=$INCREASE" >> $GITHUB_OUTPUT
+          echo "baseline=$BASELINE" >> $GITHUB_OUTPUT
+          echo "percent=$PERCENT" >> $GITHUB_OUTPUT
+        else
+          echo "increase=0" >> $GITHUB_OUTPUT
+          echo "baseline=0" >> $GITHUB_OUTPUT
+          echo "No baseline found for comparison" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Check Thresholds
+      id: threshold
+      if: steps.gate.outputs.enabled == 'true'
+      shell: bash
+      run: |
+        MONTHLY="${{ steps.cost.outputs.monthly_cost }}"
+        INCREASE="${{ steps.compare.outputs.increase }}"
+        COST_THRESHOLD="${{ inputs.cost_threshold }}"
+        INCREASE_THRESHOLD="${{ inputs.cost_increase_threshold }}"
+        EXCEEDED="false"
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check monthly cost threshold
+        if [ -n "$COST_THRESHOLD" ] && [ "$COST_THRESHOLD" != "0" ]; then
+          OVER=$(echo "$MONTHLY > $COST_THRESHOLD" | bc 2>/dev/null || echo "0")
+          if [ "$OVER" == "1" ]; then
+            echo "### ⚠️ COST THRESHOLD EXCEEDED" >> $GITHUB_STEP_SUMMARY
+            echo "Monthly cost (\$$MONTHLY) exceeds threshold (\$$COST_THRESHOLD)" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Monthly cost \$$MONTHLY exceeds threshold of \$$COST_THRESHOLD"
+            EXCEEDED="true"
+          fi
+        fi
+        
+        # Check cost increase threshold
+        if [ -n "$INCREASE_THRESHOLD" ] && [ "$INCREASE_THRESHOLD" != "0" ] && [ -n "$INCREASE" ]; then
+          OVER=$(echo "$INCREASE > $INCREASE_THRESHOLD" | bc 2>/dev/null || echo "0")
+          if [ "$OVER" == "1" ]; then
+            echo "### ⚠️ COST INCREASE THRESHOLD EXCEEDED" >> $GITHUB_STEP_SUMMARY
+            echo "Cost increase (\$$INCREASE) exceeds threshold (\$$INCREASE_THRESHOLD)" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Cost increase \$$INCREASE exceeds threshold of \$$INCREASE_THRESHOLD"
+            EXCEEDED="true"
+          fi
+        fi
+        
+        echo "exceeded=$EXCEEDED" >> $GITHUB_OUTPUT
+
+    - name: Save Baseline
+      if: steps.gate.outputs.enabled == 'true' && inputs.save_baseline == 'true'
+      shell: bash
+      run: |
+        cp /tmp/infracost.json /tmp/infracost-baseline.json
+        echo "✅ Saved current cost as baseline" >> $GITHUB_STEP_SUMMARY
 
     - name: Skipped (no API key)
       if: steps.gate.outputs.enabled != 'true'
@@ -72,6 +188,7 @@ runs:
       run: |
         echo "monthly_cost=" >> "$GITHUB_OUTPUT"
         echo "diff=" >> "$GITHUB_OUTPUT"
+        echo "threshold_exceeded=false" >> "$GITHUB_OUTPUT"
         echo "## 💰 Cost Estimation" >> "$GITHUB_STEP_SUMMARY"
         echo "Skipped: INFRACOST_API_KEY not set." >> "$GITHUB_STEP_SUMMARY"
 
@@ -81,3 +198,10 @@ runs:
       with:
         path: /tmp/infracost.json
         behavior: update
+
+    - name: Fail on Threshold
+      if: inputs.fail_on_threshold == 'true' && steps.threshold.outputs.exceeded == 'true'
+      shell: bash
+      run: |
+        echo "::error::Cost threshold exceeded. Set fail_on_threshold=false to continue."
+        exit 1

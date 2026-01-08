@@ -2,6 +2,7 @@
 # TERRAFORM PIPELINE - Azure Landing Zone (Extended)
 # =============================================================================
 # Full-featured pipeline with security, cost estimation, testing, and more
+# Can be used directly or called from other repositories via workflow_call
 # =============================================================================
 
 name: 'Terraform Pipeline'
@@ -31,6 +32,41 @@ on:
         description: 'Type DESTROY to confirm'
         required: false
         type: string
+  # Reusable workflow support
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: string
+      action:
+        description: 'Action (plan, apply, destroy)'
+        required: false
+        type: string
+        default: 'plan'
+      terraform_version:
+        description: 'Terraform version'
+        required: false
+        type: string
+        default: '1.9.0'
+      working_directory:
+        description: 'Working directory'
+        required: false
+        type: string
+        default: '.'
+    secrets:
+      AZURE_CREDENTIALS:
+        required: false
+      TF_STATE_RG:
+        required: true
+      TF_STATE_SA:
+        required: true
+      INFRACOST_API_KEY:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
+      TEAMS_WEBHOOK_URL:
+        required: false
 
 concurrency:
   group: terraform-${{ github.ref }}-${{ github.event.inputs.environment || 'lab' }}
@@ -45,6 +81,16 @@ permissions:
 env:
   TF_VERSION: '1.9.0'
   ENVIRONMENT: ${{ github.event.inputs.environment || 'lab' }}
+  # OIDC Configuration (set USE_OIDC=true in repo variables to enable)
+  USE_OIDC: ${{ vars.USE_OIDC || 'false' }}
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  # Performance Tuning
+  TF_PARALLELISM: '20'
+  TF_LOCK_TIMEOUT: '10m'
+  # Blast Radius Threshold (alert if destroy count exceeds)
+  BLAST_RADIUS_THRESHOLD: '10'
 
 jobs:
   # =========================================================================
@@ -285,7 +331,26 @@ jobs:
         with:
           api_key: ${{ secrets.INFRACOST_API_KEY }}
           var_file: environments/${{ env.ENVIRONMENT }}.tfvars
+          cost_threshold: ${{ vars.COST_THRESHOLD || '500' }}
+          cost_increase_threshold: ${{ vars.COST_INCREASE_THRESHOLD || '100' }}
+          save_baseline: ${{ github.ref == 'refs/heads/main' }}
         continue-on-error: true
+
+  # =========================================================================
+  # STAGE 6B: VERSION CHECK
+  # =========================================================================
+  version-check:
+    name: '6️⃣ Analysis - Versions'
+    runs-on: ubuntu-latest
+    needs: [graph, module-versions]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/version-check
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          check_cves: 'true'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
   # =========================================================================
   # STAGE 7: PLAN
@@ -307,12 +372,47 @@ jobs:
         uses: ./.github/actions/plan
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          # OIDC Authentication (recommended)
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          # Legacy Authentication (fallback)
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          # Backend Configuration
           backend_resource_group: ${{ secrets.TF_STATE_RG }}
           backend_storage_account: ${{ secrets.TF_STATE_SA }}
           state_key: ${{ env.ENVIRONMENT }}.terraform.tfstate
           var_file: environments/${{ env.ENVIRONMENT }}.tfvars
           environment: ${{ env.ENVIRONMENT }}
+          # Performance Tuning
+          parallelism: ${{ env.TF_PARALLELISM }}
+          lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
+
+      - name: Blast Radius Check
+        if: steps.plan.outputs.destroy != '' && steps.plan.outputs.destroy != '0'
+        run: |
+          DESTROY_COUNT=${{ steps.plan.outputs.destroy }}
+          THRESHOLD=${{ env.BLAST_RADIUS_THRESHOLD }}
+          if [ "$DESTROY_COUNT" -ge "$THRESHOLD" ]; then
+            echo "## ⚠️ BLAST RADIUS WARNING" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This plan will **destroy $DESTROY_COUNT resources** which exceeds the threshold of $THRESHOLD." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔴 **Manual review required before apply.**" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::High blast radius detected: $DESTROY_COUNT resources will be destroyed"
+          fi
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/pr-comment
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          plan_add: ${{ steps.plan.outputs.add }}
+          plan_change: ${{ steps.plan.outputs.change }}
+          plan_destroy: ${{ steps.plan.outputs.destroy }}
+          plan_file: plan_output.txt
+          collapse_plan: 'true'
 
   # =========================================================================
   # STAGE 8: APPLY
@@ -339,21 +439,32 @@ jobs:
       - name: State Backup
         uses: ./.github/actions/state-backup
         with:
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
           storage_account: ${{ secrets.TF_STATE_SA }}
           resource_group: ${{ secrets.TF_STATE_RG }}
           state_key: ${{ env.ENVIRONMENT }}.terraform.tfstate
 
       - name: Apply
+        id: apply
         uses: ./.github/actions/apply
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
           backend_resource_group: ${{ secrets.TF_STATE_RG }}
           backend_storage_account: ${{ secrets.TF_STATE_SA }}
           state_key: ${{ env.ENVIRONMENT }}.terraform.tfstate
           environment: ${{ env.ENVIRONMENT }}
           plan_artifact: tfplan-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+          lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
 
       - name: Resource Inventory
         uses: ./.github/actions/resource-inventory
@@ -365,6 +476,30 @@ jobs:
         uses: ./.github/actions/changelog
         with:
           environment: ${{ env.ENVIRONMENT }}
+
+      - name: Notify Success
+        if: success()
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          status: 'success'
+          environment: ${{ env.ENVIRONMENT }}
+          message: 'Terraform apply completed successfully'
+          title: '✅ Infrastructure Deployed'
+        continue-on-error: true
+
+      - name: Notify Failure
+        if: failure()
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          status: 'failure'
+          environment: ${{ env.ENVIRONMENT }}
+          message: 'Terraform apply failed - check workflow logs'
+          title: '❌ Deployment Failed'
+        continue-on-error: true
 
   # =========================================================================
   # STAGE 10: METRICS
@@ -405,6 +540,10 @@ jobs:
       - name: State Backup Before Destroy
         uses: ./.github/actions/state-backup
         with:
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
           storage_account: ${{ secrets.TF_STATE_SA }}
           resource_group: ${{ secrets.TF_STATE_RG }}
@@ -414,6 +553,10 @@ jobs:
         uses: ./.github/actions/destroy
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
           backend_resource_group: ${{ secrets.TF_STATE_RG }}
           backend_storage_account: ${{ secrets.TF_STATE_SA }}
@@ -421,3 +564,16 @@ jobs:
           var_file: environments/${{ env.ENVIRONMENT }}.tfvars
           environment: ${{ env.ENVIRONMENT }}
           confirm: ${{ github.event.inputs.destroy_confirm }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+
+      - name: Notify Destroy Complete
+        if: success()
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          status: 'warning'
+          environment: ${{ env.ENVIRONMENT }}
+          message: 'Infrastructure has been destroyed'
+          title: '🟡 Environment Destroyed'
+        continue-on-error: true

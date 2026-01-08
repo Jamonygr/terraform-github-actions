@@ -1,0 +1,180 @@
+name: 'Version Check'
+description: 'Check for newer Terraform/provider versions and CVEs'
+
+inputs:
+  terraform_version:
+    description: 'Current Terraform version'
+    required: false
+    default: '1.9.0'
+  working_directory:
+    description: 'Working directory with Terraform files'
+    required: false
+    default: '.'
+  check_providers:
+    description: 'Check for provider updates'
+    required: false
+    default: 'true'
+  check_terraform:
+    description: 'Check for Terraform updates'
+    required: false
+    default: 'true'
+  check_cves:
+    description: 'Check for CVEs in providers'
+    required: false
+    default: 'true'
+  fail_on_outdated:
+    description: 'Fail if major version outdated'
+    required: false
+    default: 'false'
+  github_token:
+    description: 'GitHub token for API calls'
+    required: false
+
+outputs:
+  terraform_latest:
+    description: 'Latest Terraform version'
+    value: ${{ steps.terraform.outputs.latest }}
+  terraform_outdated:
+    description: 'Whether Terraform is outdated'
+    value: ${{ steps.terraform.outputs.outdated }}
+  providers_outdated:
+    description: 'List of outdated providers'
+    value: ${{ steps.providers.outputs.outdated }}
+  cve_count:
+    description: 'Number of CVEs found'
+    value: ${{ steps.cve.outputs.count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check Terraform Version
+      id: terraform
+      if: inputs.check_terraform == 'true'
+      shell: bash
+      run: |
+        echo "## 🔍 Version Check" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Get latest Terraform version from releases API
+        LATEST=$(curl -sL https://api.github.com/repos/hashicorp/terraform/releases/latest | jq -r '.tag_name' | tr -d 'v')
+        CURRENT="${{ inputs.terraform_version }}"
+        
+        echo "### Terraform" >> $GITHUB_STEP_SUMMARY
+        echo "| Version | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Current | $CURRENT |" >> $GITHUB_STEP_SUMMARY
+        echo "| Latest | $LATEST |" >> $GITHUB_STEP_SUMMARY
+        
+        echo "latest=$LATEST" >> $GITHUB_OUTPUT
+        
+        # Compare versions
+        CURRENT_MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+        LATEST_MAJOR=$(echo "$LATEST" | cut -d. -f1)
+        CURRENT_MINOR=$(echo "$CURRENT" | cut -d. -f2)
+        LATEST_MINOR=$(echo "$LATEST" | cut -d. -f2)
+        
+        if [ "$CURRENT_MAJOR" -lt "$LATEST_MAJOR" ]; then
+          echo "| Status | ⚠️ **Major version behind** |" >> $GITHUB_STEP_SUMMARY
+          echo "outdated=major" >> $GITHUB_OUTPUT
+        elif [ "$CURRENT_MINOR" -lt "$LATEST_MINOR" ]; then
+          echo "| Status | 🔄 Minor update available |" >> $GITHUB_STEP_SUMMARY
+          echo "outdated=minor" >> $GITHUB_OUTPUT
+        else
+          echo "| Status | ✅ Up to date |" >> $GITHUB_STEP_SUMMARY
+          echo "outdated=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Check Provider Versions
+      id: providers
+      if: inputs.check_providers == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Providers" >> $GITHUB_STEP_SUMMARY
+        echo "| Provider | Current | Latest | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|---------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        
+        OUTDATED_LIST=""
+        
+        # Parse .terraform.lock.hcl if exists
+        if [ -f ".terraform.lock.hcl" ]; then
+          # Extract provider info
+          grep -E "provider|version\s*=" .terraform.lock.hcl | paste - - | while read line; do
+            PROVIDER=$(echo "$line" | grep -oP 'registry.terraform.io/\K[^"]+' | tr -d '"')
+            VERSION=$(echo "$line" | grep -oP 'version\s*=\s*"\K[^"]+')
+            
+            if [ -n "$PROVIDER" ] && [ -n "$VERSION" ]; then
+              # Get latest from Terraform Registry
+              REGISTRY_URL="https://registry.terraform.io/v1/providers/${PROVIDER}"
+              LATEST=$(curl -sL "$REGISTRY_URL" 2>/dev/null | jq -r '.version' 2>/dev/null || echo "unknown")
+              
+              if [ "$LATEST" == "null" ] || [ "$LATEST" == "unknown" ]; then
+                echo "| $PROVIDER | $VERSION | ? | ⚠️ Unable to check |" >> $GITHUB_STEP_SUMMARY
+              elif [ "$VERSION" == "$LATEST" ]; then
+                echo "| $PROVIDER | $VERSION | $LATEST | ✅ |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| $PROVIDER | $VERSION | $LATEST | 🔄 Update available |" >> $GITHUB_STEP_SUMMARY
+                OUTDATED_LIST="$OUTDATED_LIST,$PROVIDER:$VERSION->$LATEST"
+              fi
+            fi
+          done
+        else
+          echo "| - | No lock file found | - | - |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "outdated=${OUTDATED_LIST#,}" >> $GITHUB_OUTPUT
+
+    - name: Check for CVEs
+      id: cve
+      if: inputs.check_cves == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Security Advisories" >> $GITHUB_STEP_SUMMARY
+        
+        CVE_COUNT=0
+        
+        # Check Terraform CVEs from GitHub Advisory Database
+        TF_VERSION="${{ inputs.terraform_version }}"
+        
+        # Query GitHub Advisory Database for Terraform
+        ADVISORIES=$(curl -sL \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ inputs.github_token }}" \
+          "https://api.github.com/advisories?ecosystem=other&package=hashicorp/terraform&affects=$TF_VERSION" 2>/dev/null || echo "[]")
+        
+        if [ "$ADVISORIES" != "[]" ] && [ -n "$ADVISORIES" ]; then
+          COUNT=$(echo "$ADVISORIES" | jq 'length' 2>/dev/null || echo "0")
+          if [ "$COUNT" -gt 0 ]; then
+            CVE_COUNT=$COUNT
+            echo "⚠️ **$COUNT security advisory/advisories found for Terraform $TF_VERSION**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "$ADVISORIES" | jq -r '.[] | "- [\(.cve_id // .ghsa_id)](https://github.com/advisories/\(.ghsa_id)): \(.summary)"' >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+          else
+            echo "✅ No known CVEs for Terraform $TF_VERSION" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "✅ No known CVEs for Terraform $TF_VERSION" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "count=$CVE_COUNT" >> $GITHUB_OUTPUT
+        
+        if [ "$CVE_COUNT" -gt 0 ]; then
+          echo "::warning::Found $CVE_COUNT security advisories for Terraform $TF_VERSION"
+        fi
+
+    - name: Version Summary
+      shell: bash
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "*Version check completed at $(date -Iseconds)*" >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail on Outdated
+      if: inputs.fail_on_outdated == 'true' && steps.terraform.outputs.outdated == 'major'
+      shell: bash
+      run: |
+        echo "::error::Terraform is a major version behind (current: ${{ inputs.terraform_version }}, latest: ${{ steps.terraform.outputs.latest }})"
+        exit 1

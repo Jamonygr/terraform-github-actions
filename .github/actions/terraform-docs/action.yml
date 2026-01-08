@@ -18,6 +18,14 @@ inputs:
     description: 'Generate docs for modules recursively'
     required: false
     default: 'true'
+  output_method:
+    description: 'Output method (replace, inject, print)'
+    required: false
+    default: 'replace'
+  terraform_docs_version:
+    description: 'terraform-docs version'
+    required: false
+    default: '0.17.0'
 
 runs:
   using: 'composite'
@@ -25,10 +33,12 @@ runs:
     - name: Setup terraform-docs
       shell: bash
       run: |
-        curl -sSLo terraform-docs.tar.gz https://github.com/terraform-docs/terraform-docs/releases/download/v0.17.0/terraform-docs-v0.17.0-linux-amd64.tar.gz
+        VERSION="${{ inputs.terraform_docs_version }}"
+        curl -sSLo terraform-docs.tar.gz "https://github.com/terraform-docs/terraform-docs/releases/download/v${VERSION}/terraform-docs-v${VERSION}-linux-amd64.tar.gz"
         tar -xzf terraform-docs.tar.gz
         chmod +x terraform-docs
         sudo mv terraform-docs /usr/local/bin/
+        terraform-docs --version
 
     - name: Generate Documentation
       shell: bash
@@ -36,15 +46,30 @@ runs:
       run: |
         echo "## 📚 Terraform Documentation" >> $GITHUB_STEP_SUMMARY
         
+        # Build terraform-docs command with config if exists
+        DOCS_CMD="terraform-docs"
+        if [ -f "${{ inputs.config_file }}" ]; then
+          echo "✅ Using config file: ${{ inputs.config_file }}" >> $GITHUB_STEP_SUMMARY
+          DOCS_CMD="$DOCS_CMD --config ${{ inputs.config_file }}"
+        fi
+        
         # Generate root module docs
-        terraform-docs markdown table . > ${{ inputs.output_file }} 2>/dev/null || true
+        if [ "${{ inputs.output_method }}" == "inject" ]; then
+          $DOCS_CMD markdown table --output-mode inject --output-file ${{ inputs.output_file }} . 2>/dev/null || true
+        else
+          $DOCS_CMD markdown table . > ${{ inputs.output_file }} 2>/dev/null || true
+        fi
         
         # Generate docs for each module
         if [ "${{ inputs.recursive }}" == "true" ]; then
           for dir in modules/*/; do
             if [ -d "$dir" ]; then
               MODULE_NAME=$(basename "$dir")
-              terraform-docs markdown table "$dir" > "${dir}README.md" 2>/dev/null || true
+              if [ "${{ inputs.output_method }}" == "inject" ]; then
+                $DOCS_CMD markdown table --output-mode inject --output-file "${dir}README.md" "$dir" 2>/dev/null || true
+              else
+                $DOCS_CMD markdown table "$dir" > "${dir}README.md" 2>/dev/null || true
+              fi
               echo "- Generated docs for module: $MODULE_NAME" >> $GITHUB_STEP_SUMMARY
             fi
           done

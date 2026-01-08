@@ -1,0 +1,279 @@
+# =============================================================================
+# TERRAFORM MULTI-ENVIRONMENT MATRIX WORKFLOW
+# =============================================================================
+# Deploys to multiple environments in parallel with environment-specific gates
+# =============================================================================
+
+name: 'Terraform Matrix Deploy'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environments:
+        description: 'Environments to deploy (comma-separated)'
+        required: true
+        default: 'dev,staging,prod'
+        type: string
+      action:
+        description: 'Action'
+        required: true
+        default: 'plan'
+        type: choice
+        options: [plan, apply]
+      destroy_confirm:
+        description: 'Type DESTROY to confirm destruction'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: write
+  id-token: write
+  issues: write
+
+env:
+  TF_VERSION: '1.9.0'
+  USE_OIDC: ${{ vars.USE_OIDC || 'false' }}
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  # =========================================================================
+  # SETUP: Parse environments and create matrix
+  # =========================================================================
+  setup:
+    name: '🔧 Setup Matrix'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      environments: ${{ steps.set-matrix.outputs.environments }}
+    steps:
+      - name: Parse Environments
+        id: set-matrix
+        run: |
+          # Convert comma-separated input to JSON array
+          ENVS="${{ github.event.inputs.environments }}"
+          JSON_ARRAY=$(echo "$ENVS" | tr ',' '\n' | jq -R . | jq -s .)
+          echo "matrix={\"environment\":$JSON_ARRAY}" >> $GITHUB_OUTPUT
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
+          
+          echo "## 🎯 Matrix Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Action |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          for env in $(echo "$ENVS" | tr ',' ' '); do
+            echo "| $env | ${{ github.event.inputs.action }} |" >> $GITHUB_STEP_SUMMARY
+          done
+
+  # =========================================================================
+  # VALIDATE: Run once for all environments
+  # =========================================================================
+  validate:
+    name: '✅ Validate'
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Validate
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  # =========================================================================
+  # SECURITY: Run once for all environments
+  # =========================================================================
+  security:
+    name: '🔒 Security Scan'
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: true
+        continue-on-error: true
+
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          soft_fail: true
+        continue-on-error: true
+
+  # =========================================================================
+  # PLAN: Matrix strategy for each environment
+  # =========================================================================
+  plan:
+    name: '📋 Plan - ${{ matrix.environment }}'
+    runs-on: ubuntu-latest
+    needs: [setup, security]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    outputs:
+      # Note: Matrix outputs need special handling
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan
+        id: plan
+        uses: ./.github/actions/plan
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ matrix.environment }}.terraform.tfstate
+          var_file: environments/${{ matrix.environment }}.tfvars
+          environment: ${{ matrix.environment }}
+
+  # =========================================================================
+  # APPLY: Matrix strategy with environment gates
+  # =========================================================================
+  apply-dev:
+    name: '🚀 Apply - dev'
+    runs-on: ubuntu-latest
+    needs: plan
+    if: |
+      github.event.inputs.action == 'apply' && 
+      contains(github.event.inputs.environments, 'dev')
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: dev.terraform.tfstate
+          environment: dev
+          plan_artifact: tfplan-dev-${{ github.sha }}
+
+  apply-staging:
+    name: '🚀 Apply - staging'
+    runs-on: ubuntu-latest
+    needs: [plan, apply-dev]
+    if: |
+      always() &&
+      (needs.apply-dev.result == 'success' || needs.apply-dev.result == 'skipped') &&
+      github.event.inputs.action == 'apply' && 
+      contains(github.event.inputs.environments, 'staging')
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: staging.terraform.tfstate
+          environment: staging
+          plan_artifact: tfplan-staging-${{ github.sha }}
+
+  apply-prod:
+    name: '🚀 Apply - prod'
+    runs-on: ubuntu-latest
+    needs: [plan, apply-staging]
+    if: |
+      always() &&
+      (needs.apply-staging.result == 'success' || needs.apply-staging.result == 'skipped') &&
+      github.event.inputs.action == 'apply' && 
+      contains(github.event.inputs.environments, 'prod')
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: prod.terraform.tfstate
+          environment: prod
+          plan_artifact: tfplan-prod-${{ github.sha }}
+
+  # =========================================================================
+  # NOTIFY: Summary notification
+  # =========================================================================
+  notify:
+    name: '📢 Notify'
+    runs-on: ubuntu-latest
+    needs: [apply-dev, apply-staging, apply-prod]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deployment Summary
+        run: |
+          echo "## 📊 Multi-Environment Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Check each environment result
+          if [ "${{ needs.apply-dev.result }}" == "success" ]; then
+            echo "| dev | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.apply-dev.result }}" == "skipped" ]; then
+            echo "| dev | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| dev | ❌ ${{ needs.apply-dev.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.apply-staging.result }}" == "success" ]; then
+            echo "| staging | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.apply-staging.result }}" == "skipped" ]; then
+            echo "| staging | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| staging | ❌ ${{ needs.apply-staging.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.apply-prod.result }}" == "success" ]; then
+            echo "| prod | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.apply-prod.result }}" == "skipped" ]; then
+            echo "| prod | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| prod | ❌ ${{ needs.apply-prod.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Send Notification
+        if: secrets.SLACK_WEBHOOK_URL != '' || secrets.TEAMS_WEBHOOK_URL != ''
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          status: ${{ (needs.apply-dev.result == 'failure' || needs.apply-staging.result == 'failure' || needs.apply-prod.result == 'failure') && 'failure' || 'success' }}
+          environment: 'multi-env'
+          message: 'Matrix deployment completed for: ${{ github.event.inputs.environments }}'
+          title: '🎯 Matrix Deploy Complete'
+        continue-on-error: true

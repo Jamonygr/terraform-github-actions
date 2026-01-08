@@ -9,11 +9,29 @@ inputs:
   environment:
     description: 'Environment name'
     required: true
+  auto_commit:
+    description: 'Automatically commit changelog to repo'
+    required: false
+    default: 'false'
+  changelog_file:
+    description: 'Path to main changelog file'
+    required: false
+    default: 'CHANGELOG.md'
+  create_pr:
+    description: 'Create PR instead of direct commit'
+    required: false
+    default: 'false'
+  github_token:
+    description: 'GitHub token for commits/PRs'
+    required: false
 
 outputs:
   changes_summary:
     description: 'Summary of changes'
     value: ${{ steps.changelog.outputs.summary }}
+  pr_number:
+    description: 'PR number if created'
+    value: ${{ steps.pr.outputs.pr_number }}
 
 runs:
   using: 'composite'
@@ -24,6 +42,7 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       run: |
         TIMESTAMP=$(date -Iseconds)
+        DATE=$(date +%Y-%m-%d)
         COMMIT_SHA="${GITHUB_SHA:0:7}"
         
         echo "## 📝 Change Log - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
@@ -34,26 +53,95 @@ runs:
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Parse plan output if exists
+        CHANGES=""
         if [ -f plan_output.txt ]; then
           echo "### Resources Changed" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           grep -E "^  #|will be created|will be updated|will be destroyed" plan_output.txt | head -50 >> $GITHUB_STEP_SUMMARY || echo "No changes" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          CHANGES=$(grep -E "will be created|will be updated|will be destroyed" plan_output.txt 2>/dev/null | head -20 || echo "- No infrastructure changes")
+        else
+          CHANGES="- No plan output available"
         fi
         
-        # Create changelog entry
+        # Create changelog entry file
         cat > changelog-entry.md << EOF
-        ## [$COMMIT_SHA] - $(date +%Y-%m-%d)
+## [$COMMIT_SHA] - $DATE
 
-        **Environment:** ${{ inputs.environment }}
-        **Actor:** $GITHUB_ACTOR
-        **Run:** $GITHUB_RUN_ID
+**Environment:** ${{ inputs.environment }}
+**Actor:** $GITHUB_ACTOR
+**Workflow Run:** [#$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
 
-        ### Changes
-        $(grep -E "will be created|will be updated|will be destroyed" plan_output.txt 2>/dev/null | head -20 || echo "- No infrastructure changes")
-        EOF
+### Changes
+$CHANGES
+
+---
+
+EOF
         
         echo "summary=Deployment $COMMIT_SHA to ${{ inputs.environment }}" >> $GITHUB_OUTPUT
+        echo "date=$DATE" >> $GITHUB_OUTPUT
+
+    - name: Prepend to Changelog
+      if: inputs.auto_commit == 'true' || inputs.create_pr == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        CHANGELOG="${{ inputs.changelog_file }}"
+        
+        # Create changelog if it doesn't exist
+        if [ ! -f "$CHANGELOG" ]; then
+          echo "# Changelog" > "$CHANGELOG"
+          echo "" >> "$CHANGELOG"
+          echo "All notable infrastructure changes to this project." >> "$CHANGELOG"
+          echo "" >> "$CHANGELOG"
+        fi
+        
+        # Prepend new entry after header (first 4 lines)
+        head -4 "$CHANGELOG" > changelog-new.md
+        cat changelog-entry.md >> changelog-new.md
+        tail -n +5 "$CHANGELOG" >> changelog-new.md
+        mv changelog-new.md "$CHANGELOG"
+        
+        echo "✅ Updated $CHANGELOG" >> $GITHUB_STEP_SUMMARY
+
+    - name: Configure Git
+      if: inputs.auto_commit == 'true'
+      shell: bash
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Commit Changelog
+      if: inputs.auto_commit == 'true' && inputs.create_pr != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        git add ${{ inputs.changelog_file }}
+        git diff --staged --quiet || git commit -m "docs: Update changelog for ${{ inputs.environment }} deployment [skip ci]"
+        git push || echo "⚠️ Could not push changelog - may need write permissions"
+
+    - name: Create PR for Changelog
+      id: pr
+      if: inputs.create_pr == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        BRANCH="changelog/${{ inputs.environment }}-$(date +%Y%m%d-%H%M%S)"
+        git checkout -b "$BRANCH"
+        git add ${{ inputs.changelog_file }}
+        git commit -m "docs: Update changelog for ${{ inputs.environment }} deployment"
+        git push origin "$BRANCH"
+        
+        PR_URL=$(gh pr create \
+          --title "docs: Changelog update for ${{ inputs.environment }}" \
+          --body "Automated changelog update from workflow run #$GITHUB_RUN_ID" \
+          --head "$BRANCH")
+        
+        PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+        echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        echo "📤 Created PR #$PR_NUMBER" >> $GITHUB_STEP_SUMMARY
 
     - name: Upload Changelog
       uses: actions/upload-artifact@v4

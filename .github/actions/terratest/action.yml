@@ -14,17 +14,46 @@ inputs:
     description: 'Test timeout'
     required: false
     default: '30m'
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication
   azure_credentials:
-    description: 'Azure credentials JSON'
-    required: true
+    description: 'Azure credentials JSON (legacy)'
+    required: false
   environment:
     description: 'Environment name'
     required: true
+  output_format:
+    description: 'Output format (text, json, junit)'
+    required: false
+    default: 'junit'
+  gotestsum_version:
+    description: 'gotestsum version for JUnit output'
+    required: false
+    default: '1.11.0'
 
 outputs:
   passed:
     description: 'Whether tests passed'
     value: ${{ steps.test.outputs.passed }}
+  test_count:
+    description: 'Number of tests run'
+    value: ${{ steps.test.outputs.test_count }}
+  failed_count:
+    description: 'Number of failed tests'
+    value: ${{ steps.test.outputs.failed_count }}
 
 runs:
   using: 'composite'
@@ -33,13 +62,40 @@ runs:
       uses: actions/setup-go@v5
       with:
         go-version: ${{ inputs.go_version }}
+        cache: true
+        cache-dependency-path: ${{ inputs.test_directory }}/go.sum
 
-    - name: Azure Login
+    - name: Install gotestsum
+      if: inputs.output_format == 'junit'
+      shell: bash
+      run: |
+        go install gotest.tools/gotestsum@v${{ inputs.gotestsum_version }}
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true' && inputs.azure_credentials != ''
       uses: azure/login@v2
       with:
         creds: ${{ inputs.azure_credentials }}
 
-    - name: Set ARM Environment Variables
+    - name: Set ARM Environment Variables (OIDC)
+      if: inputs.use_oidc == 'true'
+      shell: bash
+      run: |
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ inputs.azure_client_id }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ inputs.azure_subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ inputs.azure_tenant_id }}" >> $GITHUB_ENV
+
+    - name: Set ARM Environment Variables (Legacy)
+      if: inputs.use_oidc != 'true' && inputs.azure_credentials != ''
       shell: bash
       run: |
         echo "ARM_CLIENT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientId')" >> $GITHUB_ENV
@@ -58,8 +114,34 @@ runs:
           go mod download
           
           set +e
-          go test -v -timeout ${{ inputs.timeout }} ./... 2>&1 | tee test_output.txt
-          EXITCODE=$?
+          
+          if [ "${{ inputs.output_format }}" == "junit" ]; then
+            # Use gotestsum for JUnit XML output
+            gotestsum \
+              --junitfile test-results.xml \
+              --format testname \
+              -- -v -timeout ${{ inputs.timeout }} ./... 2>&1 | tee test_output.txt
+            EXITCODE=$?
+            
+            # Parse JUnit for counts
+            if [ -f test-results.xml ]; then
+              TESTS=$(grep -oP 'tests="\K[0-9]+' test-results.xml | head -1 || echo "0")
+              FAILURES=$(grep -oP 'failures="\K[0-9]+' test-results.xml | head -1 || echo "0")
+              echo "test_count=$TESTS" >> $GITHUB_OUTPUT
+              echo "failed_count=$FAILURES" >> $GITHUB_OUTPUT
+            fi
+          elif [ "${{ inputs.output_format }}" == "json" ]; then
+            # JSON output
+            go test -v -json -timeout ${{ inputs.timeout }} ./... 2>&1 | tee test_output.json
+            EXITCODE=$?
+            # Convert to readable output
+            cat test_output.json | jq -r 'select(.Action=="pass" or .Action=="fail") | "\(.Action | ascii_upcase): \(.Package)/\(.Test)"' > test_output.txt 2>/dev/null || true
+          else
+            # Plain text output
+            go test -v -timeout ${{ inputs.timeout }} ./... 2>&1 | tee test_output.txt
+            EXITCODE=$?
+          fi
+          
           set -e
           
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -70,12 +152,14 @@ runs:
             echo "❌ Some tests failed" >> $GITHUB_STEP_SUMMARY
             echo "passed=false" >> $GITHUB_OUTPUT
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            grep -E "FAIL|PASS|---" test_output.txt >> $GITHUB_STEP_SUMMARY
+            grep -E "FAIL|PASS|---" test_output.txt >> $GITHUB_STEP_SUMMARY || true
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
         else
           echo "⚠️ No tests found in ${{ inputs.test_directory }}" >> $GITHUB_STEP_SUMMARY
           echo "passed=true" >> $GITHUB_OUTPUT
+          echo "test_count=0" >> $GITHUB_OUTPUT
+          echo "failed_count=0" >> $GITHUB_OUTPUT
         fi
       continue-on-error: true
 
@@ -84,5 +168,18 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: terratest-results-${{ inputs.environment }}
-        path: ${{ inputs.test_directory }}/test_output.txt
+        path: |
+          ${{ inputs.test_directory }}/test_output.txt
+          ${{ inputs.test_directory }}/test_output.json
+          ${{ inputs.test_directory }}/test-results.xml
         retention-days: 30
+
+    - name: Publish Test Report
+      if: always() && inputs.output_format == 'junit'
+      uses: mikepenz/action-junit-report@v4
+      with:
+        report_paths: '${{ inputs.test_directory }}/test-results.xml'
+        fail_on_failure: false
+        include_passed: true
+        detailed_summary: true
+      continue-on-error: true
