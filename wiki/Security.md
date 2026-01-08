@@ -2,6 +2,8 @@
 
 This pipeline includes multiple security layers to detect misconfigurations, leaked secrets, and risky changes.
 
+![Security layers](assets/security-layers.svg)
+
 ## Security scanners
 
 | Tool | Purpose | Job |
@@ -23,6 +25,8 @@ This pipeline includes multiple security layers to detect misconfigurations, lea
 - Policies live under `policies/`.
 - Conftest evaluates `tfplan.json` produced from the plan.
 - Use `soft_fail=false` to block on policy violations.
+
+![Policy and approval gates](assets/policy-gates.svg)
 
 ## Secret scanning
 

@@ -2,6 +2,10 @@
 
 This repository is designed as a reusable pipeline with a single orchestrator workflow and a set of composite actions.
 
+## Architecture overview
+
+![Architecture overview](assets/architecture-overview.svg)
+
 ## Components
 
 - **Unified workflow**: `.github/workflows/terraform.yml` routes all modes.
@@ -19,6 +23,8 @@ This repository is designed as a reusable pipeline with a single orchestrator wo
 2. Plan artifacts are created and uploaded.
 3. Apply consumes the plan artifact and records audit output.
 4. Metrics and inventories are generated post-apply.
+
+![Observability outputs](assets/observability.svg)
 
 ## Modes and routing
 

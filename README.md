@@ -13,6 +13,7 @@ Reusable GitHub Actions for Terraform workflows. Includes plan, apply, validate,
 - [Features](#-features)
 - [Quick Start](#-quick-start)
 - [Documentation](#-documentation)
+- [Diagram Gallery](#diagram-gallery)
 - [Actions Reference](#-actions-reference)
 - [Workflow Example](#-workflow-example)
 - [Pipeline Stages](#-pipeline-stages)
@@ -115,9 +116,37 @@ Full documentation is available in the repo wiki folder. Start here:
 - [Pipeline Stages](wiki/Pipeline-Stages.md)
 - [Actions Reference](wiki/Actions-Reference.md)
 
+## Diagram Gallery
+
 ![Pipeline overview](wiki/assets/pipeline-overview.svg)
 
 ![Modes diagram](wiki/assets/modes-diagram.svg)
+
+![Architecture overview](wiki/assets/architecture-overview.svg)
+
+![Workflow triggers](wiki/assets/workflow-triggers.svg)
+
+![Authentication options](wiki/assets/authentication-options.svg)
+
+![Environment promotion](wiki/assets/environment-promotion.svg)
+
+![Security layers](wiki/assets/security-layers.svg)
+
+![Cost visibility](wiki/assets/cost-visibility.svg)
+
+![Testing pyramid](wiki/assets/testing-pyramid.svg)
+
+![Drift detection loop](wiki/assets/drift-loop.svg)
+
+![State backup and restore](wiki/assets/state-backup.svg)
+
+![Policy and approval gates](wiki/assets/policy-gates.svg)
+
+![Ephemeral PR environment](wiki/assets/ephemeral-env.svg)
+
+![Actions catalog](wiki/assets/actions-catalog.svg)
+
+![Observability outputs](wiki/assets/observability.svg)
 
 ---
 

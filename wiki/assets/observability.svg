@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="420" />
+  <text class="title" x="40" y="50">Observability Outputs</text>
+
+  <rect class="box" x="40" y="90" width="260" height="55" />
+  <text class="label" x="60" y="122">Metrics</text>
+
+  <rect class="box" x="40" y="160" width="260" height="55" />
+  <text class="label" x="60" y="192">Resource Inventory</text>
+
+  <rect class="box" x="40" y="230" width="260" height="55" />
+  <text class="label" x="60" y="262">Changelog</text>
+
+  <rect class="box" x="40" y="300" width="260" height="55" />
+  <text class="label" x="60" y="332">Dependency Graph</text>
+
+  <rect class="box" x="420" y="180" width="220" height="80" />
+  <text class="label" x="440" y="215">Artifacts</text>
+  <text class="sub" x="440" y="237">JSON, SARIF, SVG</text>
+
+  <rect class="box" x="760" y="180" width="260" height="80" />
+  <text class="label" x="780" y="215">Dashboards / Issues</text>
+  <text class="sub" x="780" y="237">reports and alerts</text>
+
+  <line class="line" x1="300" y1="118" x2="420" y2="220" />
+  <line class="line" x1="300" y1="188" x2="420" y2="220" />
+  <line class="line" x1="300" y1="258" x2="420" y2="220" />
+  <line class="line" x1="300" y1="328" x2="420" y2="220" />
+  <line class="line" x1="640" y1="220" x2="760" y2="220" />
+</svg>

@@ -8,6 +8,8 @@ This page covers apply/destroy flows, backups, notifications, and audit logging.
 - Environment protection rules can enforce approvals.
 - Optional canary apply runs first when enabled.
 
+![Environment promotion](assets/environment-promotion.svg)
+
 ## Destroy
 
 - Destroy runs only on manual dispatch (`action: destroy`).
@@ -18,6 +20,8 @@ This page covers apply/destroy flows, backups, notifications, and audit logging.
 
 - `state-backup` runs before apply/destroy.
 - Use `state-restore` to recover a previous snapshot.
+
+![State backup and restore](assets/state-backup.svg)
 
 ## Change freeze
 
@@ -32,6 +36,8 @@ This page covers apply/destroy flows, backups, notifications, and audit logging.
 
 - `metrics` job records duration and change counts.
 - Audit logs can be sent to Log Analytics when configured.
+
+![Observability outputs](assets/observability.svg)
 
 ## Canary apply (optional)
 

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="360" />
+  <text class="title" x="40" y="50">Cost Visibility Flow</text>
+
+  <rect class="box" x="20" y="140" width="200" height="70" />
+  <text class="label" x="40" y="170">Plan</text>
+  <text class="sub" x="40" y="192">tfplan.json</text>
+
+  <rect class="box" x="260" y="140" width="200" height="70" />
+  <text class="label" x="280" y="170">Infracost</text>
+  <text class="sub" x="280" y="192">cost diff</text>
+
+  <rect class="box" x="500" y="140" width="200" height="70" />
+  <text class="label" x="520" y="170">Cost Report</text>
+  <text class="sub" x="520" y="192">PR comment</text>
+
+  <rect class="box" x="740" y="140" width="200" height="70" />
+  <text class="label" x="760" y="170">Budget Gate</text>
+  <text class="sub" x="760" y="192">thresholds</text>
+
+  <rect class="box" x="980" y="140" width="200" height="70" />
+  <text class="label" x="1000" y="170">Apply</text>
+  <text class="sub" x="1000" y="192">manual action</text>
+
+  <line class="line" x1="220" y1="175" x2="260" y2="175" />
+  <line class="line" x1="460" y1="175" x2="500" y2="175" />
+  <line class="line" x1="700" y1="175" x2="740" y2="175" />
+  <line class="line" x1="940" y1="175" x2="980" y2="175" />
+</svg>

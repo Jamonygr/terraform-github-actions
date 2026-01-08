@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="420" />
+  <text class="title" x="40" y="50">Security Layers</text>
+
+  <rect class="box" x="280" y="80" width="640" height="55" />
+  <text class="label" x="300" y="112">Secret Scan</text>
+  <text class="sub" x="300" y="130">gitleaks</text>
+
+  <rect class="box" x="280" y="150" width="640" height="55" />
+  <text class="label" x="300" y="182">IaC Scan</text>
+  <text class="sub" x="300" y="200">tfsec, checkov, terrascan</text>
+
+  <rect class="box" x="280" y="220" width="640" height="55" />
+  <text class="label" x="300" y="252">Policy Check</text>
+  <text class="sub" x="300" y="270">OPA / Conftest</text>
+
+  <rect class="box" x="280" y="290" width="640" height="55" />
+  <text class="label" x="300" y="322">Tag Audit</text>
+  <text class="sub" x="300" y="340">required tags</text>
+
+  <rect class="box" x="280" y="360" width="640" height="55" />
+  <text class="label" x="300" y="392">Approval Gate</text>
+  <text class="sub" x="300" y="410">protected environments</text>
+
+  <line class="line" x1="600" y1="135" x2="600" y2="150" />
+  <line class="line" x1="600" y1="205" x2="600" y2="220" />
+  <line class="line" x1="600" y1="275" x2="600" y2="290" />
+  <line class="line" x1="600" y1="345" x2="600" y2="360" />
+</svg>

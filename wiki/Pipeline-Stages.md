@@ -6,6 +6,16 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 
 ![Pipeline overview](assets/pipeline-overview.svg)
 
+## Gates and flows
+
+![Environment promotion](assets/environment-promotion.svg)
+
+![Policy and approval gates](assets/policy-gates.svg)
+
+![State backup and restore](assets/state-backup.svg)
+
+![Drift detection loop](assets/drift-loop.svg)
+
 ## Core stages (always on)
 
 | Stage | Job | Purpose |

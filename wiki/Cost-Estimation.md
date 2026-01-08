@@ -2,6 +2,8 @@
 
 The workflow integrates Infracost to provide cost visibility and budget guardrails.
 
+![Cost visibility](assets/cost-visibility.svg)
+
 ## How it works
 
 - The `cost-estimate` job runs after module version and graph stages.

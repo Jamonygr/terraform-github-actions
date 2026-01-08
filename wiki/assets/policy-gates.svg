@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+      .note { font: 12px 'Segoe UI', Arial, sans-serif; fill: #36454f; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="360" />
+  <text class="title" x="40" y="50">Policy and Approval Gates</text>
+
+  <rect class="box" x="40" y="140" width="180" height="60" />
+  <text class="label" x="60" y="175">Plan</text>
+
+  <rect class="box" x="260" y="140" width="180" height="60" />
+  <text class="label" x="280" y="175">Policy Check</text>
+
+  <rect class="box" x="480" y="140" width="180" height="60" />
+  <text class="label" x="500" y="175">Tag Audit</text>
+
+  <rect class="box" x="700" y="140" width="180" height="60" />
+  <text class="label" x="720" y="175">Approval</text>
+
+  <rect class="box" x="920" y="140" width="180" height="60" />
+  <text class="label" x="940" y="175">Apply</text>
+
+  <text class="note" x="270" y="225">soft or hard fail</text>
+
+  <line class="line" x1="220" y1="170" x2="260" y2="170" />
+  <line class="line" x1="440" y1="170" x2="480" y2="170" />
+  <line class="line" x1="660" y1="170" x2="700" y2="170" />
+  <line class="line" x1="880" y1="170" x2="920" y2="170" />
+</svg>

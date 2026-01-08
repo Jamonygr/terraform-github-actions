@@ -2,6 +2,8 @@
 
 This repository provides composite actions under `.github/actions/`. The unified workflow uses these actions directly.
 
+![Actions catalog](assets/actions-catalog.svg)
+
 ## Core actions
 
 | Action | Description | Key inputs |

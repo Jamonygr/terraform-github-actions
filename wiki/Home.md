@@ -24,6 +24,34 @@ Welcome to the documentation for the Terraform GitHub Actions repository. This w
 
 ![Modes diagram](assets/modes-diagram.svg)
 
+## Architecture overview
+
+![Architecture overview](assets/architecture-overview.svg)
+
+## Trigger routing
+
+![Workflow triggers](assets/workflow-triggers.svg)
+
+## Environment promotion
+
+![Environment promotion](assets/environment-promotion.svg)
+
+## Security layers
+
+![Security layers](assets/security-layers.svg)
+
+## Testing pyramid
+
+![Testing pyramid](assets/testing-pyramid.svg)
+
+## Cost visibility
+
+![Cost visibility](assets/cost-visibility.svg)
+
+## Observability outputs
+
+![Observability outputs](assets/observability.svg)
+
 ## What this repository provides
 
 - A single, unified workflow that supports single-environment, multi-environment matrix, and scheduled drift detection.

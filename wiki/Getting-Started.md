@@ -66,6 +66,10 @@ See [.github/SETUP.md](../.github/SETUP.md) for PowerShell and Bash scripts.
    - `environment`: `lab` (or another non-prod environment)
    - `action`: `plan`
 
+## Workflow triggers
+
+![Workflow triggers](assets/workflow-triggers.svg)
+
 ## Optional variables
 
 You can enable additional stages by setting repository variables. See [Pipeline Stages](Pipeline-Stages.md) for details.

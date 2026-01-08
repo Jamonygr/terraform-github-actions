@@ -8,6 +8,10 @@ The unified workflow supports three modes that are routed by the `mode` input (o
 | `matrix` | Parallel plan/apply across environments | Manual dispatch | Uses a comma-separated environment list |
 | `drift` | Scheduled or manual drift detection | Schedule or manual dispatch | Uses refresh-only plans |
 
+## Trigger routing
+
+![Workflow triggers](assets/workflow-triggers.svg)
+
 ![Modes diagram](assets/modes-diagram.svg)
 
 ## Single mode

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="420" />
+  <text class="title" x="40" y="50">Architecture Overview</text>
+
+  <rect class="box" x="20" y="90" width="200" height="70" />
+  <text class="label" x="40" y="120">GitHub Repo</text>
+  <text class="sub" x="40" y="142">Terraform + workflows</text>
+
+  <rect class="box" x="260" y="90" width="200" height="70" />
+  <text class="label" x="280" y="120">Workflow Router</text>
+  <text class="sub" x="280" y="142">single / matrix / drift</text>
+
+  <rect class="box" x="500" y="90" width="200" height="70" />
+  <text class="label" x="520" y="120">Composite Actions</text>
+  <text class="sub" x="520" y="142">plan / apply / security</text>
+
+  <rect class="box" x="740" y="90" width="200" height="70" />
+  <text class="label" x="760" y="120">Terraform CLI</text>
+  <text class="sub" x="760" y="142">init / plan / apply</text>
+
+  <rect class="box" x="980" y="90" width="200" height="70" />
+  <text class="label" x="1000" y="120">Azure</text>
+  <text class="sub" x="1000" y="142">resource changes</text>
+
+  <rect class="box" x="500" y="210" width="200" height="70" />
+  <text class="label" x="520" y="240">Reporting</text>
+  <text class="sub" x="520" y="262">PR comments, artifacts</text>
+
+  <rect class="box" x="740" y="210" width="200" height="70" />
+  <text class="label" x="760" y="240">State Storage</text>
+  <text class="sub" x="760" y="262">tfstate + backups</text>
+
+  <line class="line" x1="220" y1="125" x2="260" y2="125" />
+  <line class="line" x1="460" y1="125" x2="500" y2="125" />
+  <line class="line" x1="700" y1="125" x2="740" y2="125" />
+  <line class="line" x1="940" y1="125" x2="980" y2="125" />
+  <line class="line" x1="600" y1="160" x2="600" y2="210" />
+  <line class="line" x1="840" y1="160" x2="840" y2="210" />
+</svg>

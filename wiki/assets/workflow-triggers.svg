@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3a42" />
+    </marker>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .title { font: 700 24px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .box { fill: #ffffff; stroke: #2b3a42; stroke-width: 2; rx: 10; }
+      .label { font: 600 16px 'Segoe UI', Arial, sans-serif; fill: #1f2a33; }
+      .sub { font: 12px 'Segoe UI', Arial, sans-serif; fill: #5c6b73; }
+      .line { stroke: #2b3a42; stroke-width: 2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1200" height="420" />
+  <text class="title" x="40" y="50">Workflow Triggers</text>
+
+  <rect class="box" x="80" y="80" width="180" height="60" />
+  <text class="label" x="100" y="115">Push</text>
+  <text class="sub" x="100" y="135">branch updates</text>
+
+  <rect class="box" x="300" y="80" width="180" height="60" />
+  <text class="label" x="320" y="115">Pull Request</text>
+  <text class="sub" x="320" y="135">plan on PR</text>
+
+  <rect class="box" x="520" y="80" width="180" height="60" />
+  <text class="label" x="540" y="115">Dispatch</text>
+  <text class="sub" x="540" y="135">manual actions</text>
+
+  <rect class="box" x="740" y="80" width="180" height="60" />
+  <text class="label" x="760" y="115">Schedule</text>
+  <text class="sub" x="760" y="135">drift checks</text>
+
+  <rect class="box" x="490" y="190" width="220" height="70" />
+  <text class="label" x="510" y="225">Router Job</text>
+  <text class="sub" x="510" y="247">mode selection</text>
+
+  <rect class="box" x="200" y="310" width="200" height="60" />
+  <text class="label" x="220" y="345">Single</text>
+  <text class="sub" x="220" y="365">one environment</text>
+
+  <rect class="box" x="500" y="310" width="200" height="60" />
+  <text class="label" x="520" y="345">Matrix</text>
+  <text class="sub" x="520" y="365">multi environment</text>
+
+  <rect class="box" x="800" y="310" width="200" height="60" />
+  <text class="label" x="820" y="345">Drift</text>
+  <text class="sub" x="820" y="365">refresh only</text>
+
+  <line class="line" x1="170" y1="140" x2="600" y2="190" />
+  <line class="line" x1="390" y1="140" x2="600" y2="190" />
+  <line class="line" x1="610" y1="140" x2="600" y2="190" />
+  <line class="line" x1="830" y1="140" x2="600" y2="190" />
+
+  <line class="line" x1="600" y1="260" x2="300" y2="310" />
+  <line class="line" x1="600" y1="260" x2="600" y2="310" />
+  <line class="line" x1="600" y1="260" x2="900" y2="310" />
+</svg>
