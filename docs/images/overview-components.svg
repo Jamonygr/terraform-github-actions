@@ -24,15 +24,15 @@
   <text class="sub" x="280" y="175">plan, apply, destroy</text>
 
   <rect class="box" x="480" y="120" width="200" height="80" />
-  <text class="label" x="500" y="152">Security & Policy</text>
+  <text class="label" x="500" y="152">Security &amp; Policy</text>
   <text class="sub" x="500" y="175">tfsec, checkov, OPA</text>
 
   <rect class="box" x="700" y="120" width="200" height="80" />
-  <text class="label" x="720" y="152">Testing & Cost</text>
+  <text class="label" x="720" y="152">Testing &amp; Cost</text>
   <text class="sub" x="720" y="175">terraform test, Infracost</text>
 
   <rect class="box" x="920" y="120" width="200" height="80" />
-  <text class="label" x="940" y="152">Ops & Drift</text>
+  <text class="label" x="940" y="152">Ops &amp; Drift</text>
   <text class="sub" x="940" y="175">metrics, drift detect</text>
 
   <line class="line" x1="240" y1="160" x2="260" y2="160" />
