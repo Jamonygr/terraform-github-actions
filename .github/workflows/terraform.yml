@@ -91,6 +91,11 @@ env:
   TF_LOCK_TIMEOUT: '10m'
   # Blast Radius Threshold (alert if destroy count exceeds)
   BLAST_RADIUS_THRESHOLD: '10'
+  # Change Freeze Window (UTC) - block deployments during weekends
+  # Set ENABLE_FREEZE_WINDOW=true in repo variables to enable
+  ENABLE_FREEZE_WINDOW: ${{ vars.ENABLE_FREEZE_WINDOW || 'false' }}
+  # Audit Log destination
+  LOG_ANALYTICS_WORKSPACE_ID: ${{ vars.LOG_ANALYTICS_WORKSPACE_ID || '' }}
 
 jobs:
   # =========================================================================
@@ -99,8 +104,11 @@ jobs:
   format:
     name: '1️⃣ Format Check'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -121,9 +129,12 @@ jobs:
   validate:
     name: '2️⃣ Validate'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: format
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -141,9 +152,12 @@ jobs:
   security-tfsec:
     name: '3️⃣ Security - tfsec'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: validate
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: aquasecurity/tfsec-action@v1.0.3
         with:
@@ -176,9 +190,12 @@ jobs:
   security-checkov:
     name: '3️⃣ Security - Checkov'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: validate
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: bridgecrewio/checkov-action@v12
         with:
@@ -203,13 +220,63 @@ jobs:
   secret-scan:
     name: '3️⃣ Security - Secrets'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: validate
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history needed for secret scanning
 
       - uses: ./.github/actions/secret-scan
+
+  # =========================================================================
+  # STAGE 3: SHELLCHECK - Script Security
+  # =========================================================================
+  shellcheck:
+    name: '3️⃣ Security - Scripts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on Composite Actions
+        run: |
+          echo "## 🐚 ShellCheck Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Find all bash scripts in actions
+          SCRIPTS=$(find .github/actions -name "*.sh" 2>/dev/null || true)
+          
+          # Also extract inline bash from action.yml files
+          ERRORS=0
+          for action in .github/actions/*/action.yml; do
+            ACTION_NAME=$(dirname "$action" | xargs basename)
+            
+            # Extract shell script blocks and check them
+            grep -Pzo '(?s)run: \|\n\s+.*?(?=\n\s+-|\n\s+[a-z]+:|$)' "$action" 2>/dev/null | \
+              tr '\0' '\n' | sed 's/^run: |//' > /tmp/script_$ACTION_NAME.sh 2>/dev/null || true
+            
+            if [ -s "/tmp/script_$ACTION_NAME.sh" ]; then
+              if ! shellcheck -S warning /tmp/script_$ACTION_NAME.sh 2>/dev/null; then
+                echo "⚠️ Issues found in: $ACTION_NAME" >> $GITHUB_STEP_SUMMARY
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          done
+          
+          if [ $ERRORS -eq 0 ]; then
+            echo "✅ No critical shell script issues found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Found issues in $ERRORS action(s) - review recommended" >> $GITHUB_STEP_SUMMARY
+          fi
+        continue-on-error: true
 
   # =========================================================================
   # STAGE 4: TFLINT
@@ -217,9 +284,12 @@ jobs:
   tflint:
     name: '4️⃣ Lint - TFLint'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: validate
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: terraform-linters/setup-tflint@v4
 
@@ -243,9 +313,12 @@ jobs:
   policy-check:
     name: '4️⃣ Lint - Policy'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: validate
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -265,9 +338,12 @@ jobs:
   terraform-docs:
     name: '4️⃣ Lint - Docs'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: validate
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: ./.github/actions/terraform-docs
         with:
@@ -279,9 +355,12 @@ jobs:
   graph:
     name: '5️⃣ Analysis - Graph'
     runs-on: ubuntu-latest
-    needs: [security-tfsec, security-checkov, secret-scan, tflint, policy-check]
+    timeout-minutes: 15
+    needs: [security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -297,9 +376,12 @@ jobs:
   module-versions:
     name: '5️⃣ Analysis - Versions'
     runs-on: ubuntu-latest
-    needs: [security-tfsec, security-checkov, secret-scan, tflint, policy-check]
+    timeout-minutes: 15
+    needs: [security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -316,9 +398,12 @@ jobs:
   cost-estimate:
     name: '6️⃣ Analysis - Cost'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [graph, module-versions]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -342,9 +427,12 @@ jobs:
   version-check:
     name: '6️⃣ Analysis - Versions'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [graph, module-versions]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: ./.github/actions/version-check
         with:
@@ -358,6 +446,7 @@ jobs:
   plan:
     name: '7️⃣ Plan'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [graph, module-versions]
     outputs:
       has_changes: ${{ steps.plan.outputs.has_changes }}
@@ -366,6 +455,8 @@ jobs:
       destroy: ${{ steps.plan.outputs.destroy }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Plan
         id: plan
@@ -415,11 +506,39 @@ jobs:
           collapse_plan: 'true'
 
   # =========================================================================
+  # STAGE 7B: INTEGRATION TESTS (PR only)
+  # =========================================================================
+  integration-tests:
+    name: '🧪 Integration Tests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: plan
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/terratest
+        with:
+          test_directory: tests
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          environment: ${{ env.ENVIRONMENT }}
+          timeout: '30m'
+          output_format: 'junit'
+        continue-on-error: true
+
+  # =========================================================================
   # STAGE 8: APPLY
   # =========================================================================
   apply:
     name: '8️⃣ Apply'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [plan, cost-estimate]
     if: |
       always() &&
@@ -429,8 +548,33 @@ jobs:
     environment: ${{ github.event.inputs.environment }}
     outputs:
       start_time: ${{ steps.timer.outputs.start }}
+      apply_result: ${{ steps.apply.outcome }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Change Freeze Window Check
+        if: env.ENABLE_FREEZE_WINDOW == 'true'
+        run: |
+          HOUR=$(date -u +%H)
+          DAY=$(date -u +%u)  # 1=Monday, 7=Sunday
+          
+          # Block deployments Friday 5PM - Monday 9AM UTC
+          if ([ "$DAY" -eq 5 ] && [ "$HOUR" -ge 17 ]) || \
+             [ "$DAY" -eq 6 ] || [ "$DAY" -eq 7 ] || \
+             ([ "$DAY" -eq 1 ] && [ "$HOUR" -lt 9 ]); then
+            echo "## ⛔ Change Freeze Window Active" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Deployments are blocked during the weekend change freeze." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Freeze Period:** Friday 5PM - Monday 9AM UTC" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Set \`ENABLE_FREEZE_WINDOW=false\` to override." >> $GITHUB_STEP_SUMMARY
+            echo "::error::Deployments blocked during change freeze window (Friday 5PM - Monday 9AM UTC)"
+            exit 1
+          fi
+          echo "✅ Outside change freeze window - deployment allowed" >> $GITHUB_STEP_SUMMARY
 
       - name: Start Timer
         id: timer
@@ -466,16 +610,118 @@ jobs:
           parallelism: ${{ env.TF_PARALLELISM }}
           lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
 
+      - name: Post-Apply Smoke Test
+        id: smoke-test
+        if: success()
+        run: |
+          echo "## 🔥 Post-Apply Smoke Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Basic Azure connectivity check
+          echo "### Azure Connectivity" >> $GITHUB_STEP_SUMMARY
+          if az account show > /dev/null 2>&1; then
+            echo "✅ Azure CLI authenticated" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Azure CLI not authenticated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check if resources in state are accessible
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Resource Verification" >> $GITHUB_STEP_SUMMARY
+          
+          # List resources from state (non-sensitive)
+          RESOURCE_COUNT=$(terraform state list 2>/dev/null | wc -l || echo "0")
+          echo "- Resources in state: $RESOURCE_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # Verify key resource groups exist (customize as needed)
+          RG_NAME="rg-${{ env.ENVIRONMENT }}"
+          if az group show --name "$RG_NAME" > /dev/null 2>&1; then
+            echo "✅ Resource group $RG_NAME exists" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Resource group $RG_NAME not found (may use different naming)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Smoke test completed" >> $GITHUB_STEP_SUMMARY
+        continue-on-error: true
+
+      - name: Rollback on Apply Failure
+        if: failure() && steps.apply.outcome == 'failure'
+        run: |
+          echo "## ⚠️ Apply Failed - Rollback Available" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The apply step failed. A state backup was created before the apply." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### To Rollback:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Go to Actions → Run workflow" >> $GITHUB_STEP_SUMMARY
+          echo "2. Use the **state-restore** action with:" >> $GITHUB_STEP_SUMMARY
+          echo "   - \`state_key\`: ${{ env.ENVIRONMENT }}.terraform.tfstate" >> $GITHUB_STEP_SUMMARY
+          echo "   - \`confirm\`: RESTORE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Or run manually:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# List available backups" >> $GITHUB_STEP_SUMMARY
+          echo "az storage blob list --account-name ${{ secrets.TF_STATE_SA }} --container-name tfstate-backup --query \"[?contains(name,'${{ env.ENVIRONMENT }}')].name\" -o tsv" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "::warning::Apply failed - manual rollback may be required. State backup is available."
+
       - name: Resource Inventory
+        if: success()
         uses: ./.github/actions/resource-inventory
         with:
           environment: ${{ env.ENVIRONMENT }}
           format: json
 
       - name: Change Log
+        if: success()
         uses: ./.github/actions/changelog
         with:
           environment: ${{ env.ENVIRONMENT }}
+
+      - name: Create Audit Log Entry
+        if: always()
+        id: audit
+        run: |
+          cat > audit-entry.json << EOF
+          {
+            "timestamp": "$(date -Iseconds)",
+            "workflow_run_id": "${{ github.run_id }}",
+            "workflow_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "actor": "$GITHUB_ACTOR",
+            "environment": "${{ env.ENVIRONMENT }}",
+            "action": "apply",
+            "result": "${{ steps.apply.outcome }}",
+            "commit_sha": "${{ github.sha }}",
+            "commit_message": "$(git log -1 --pretty=%s 2>/dev/null || echo 'N/A')",
+            "branch": "${{ github.ref_name }}",
+            "resources_added": ${{ needs.plan.outputs.add || 0 }},
+            "resources_changed": ${{ needs.plan.outputs.change || 0 }},
+            "resources_destroyed": ${{ needs.plan.outputs.destroy || 0 }},
+            "duration_seconds": $(($(date +%s) - ${{ steps.timer.outputs.start }})),
+            "triggered_by": "${{ github.event_name }}",
+            "repository": "${{ github.repository }}"
+          }
+          EOF
+          
+          echo "## 📋 Audit Log Entry Created" >> $GITHUB_STEP_SUMMARY
+          cat audit-entry.json >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Audit Log Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-log-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          path: audit-entry.json
+          retention-days: 2555  # 7 years for compliance
+
+      - name: Send Audit to Azure Log Analytics
+        if: always() && env.LOG_ANALYTICS_WORKSPACE_ID != ''
+        run: |
+          echo "Sending audit log to Azure Log Analytics..."
+          # Note: Requires LOG_ANALYTICS_SHARED_KEY secret for full integration
+          # This is a placeholder for the Log Analytics Data Collector API
+          echo "Audit log would be sent to workspace: ${{ env.LOG_ANALYTICS_WORKSPACE_ID }}"
+        continue-on-error: true
 
       - name: Notify Success
         if: success()
@@ -507,10 +753,13 @@ jobs:
   metrics:
     name: '🔟 Metrics'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [apply, plan]
     if: always() && needs.apply.result == 'success'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: ./.github/actions/metrics
         with:
@@ -528,6 +777,7 @@ jobs:
   destroy:
     name: '9️⃣ Destroy'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: plan
     if: |
       github.event_name == 'workflow_dispatch' &&
@@ -536,6 +786,27 @@ jobs:
     environment: ${{ github.event.inputs.environment }}-destroy
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check Change Freeze Window
+        if: env.ENABLE_FREEZE_WINDOW == 'true'
+        run: |
+          current_day=$(date -u +%u)
+          current_hour=$(date -u +%H)
+          
+          # Block Friday 17:00 UTC through Monday 09:00 UTC
+          if [[ $current_day -eq 5 && $current_hour -ge 17 ]] || \
+             [[ $current_day -eq 6 ]] || \
+             [[ $current_day -eq 7 ]] || \
+             [[ $current_day -eq 1 && $current_hour -lt 9 ]]; then
+            echo "::error::❄️ CHANGE FREEZE: Destroy operations are blocked during weekends (Friday 5PM - Monday 9AM UTC)"
+            echo "Current time: $(date -u)"
+            echo "To override, disable ENABLE_FREEZE_WINDOW in workflow env vars"
+            exit 1
+          fi
+          echo "✅ Not in change freeze window - destroy may proceed"
+        shell: bash
 
       - name: State Backup Before Destroy
         uses: ./.github/actions/state-backup
