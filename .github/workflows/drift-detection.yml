@@ -1,0 +1,124 @@
+# =============================================================================
+# DRIFT DETECTION WORKFLOW
+# =============================================================================
+# Scheduled workflow to detect infrastructure drift from Terraform state
+# Runs daily and creates GitHub issues when drift is detected
+# =============================================================================
+
+name: 'Drift Detection'
+
+on:
+  # Run daily at 6 AM UTC
+  schedule:
+    - cron: '0 6 * * *'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, dev, staging, prod]
+      create_issue:
+        description: 'Create issue on drift'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+env:
+  TF_VERSION: '1.9.0'
+
+jobs:
+  # =========================================================================
+  # DRIFT DETECTION MATRIX
+  # =========================================================================
+  detect-drift:
+    name: '🔍 Drift - ${{ matrix.environment }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+        # Exclude environments based on input
+        exclude:
+          - environment: ${{ github.event.inputs.environment != 'all' && github.event.inputs.environment != 'dev' && 'dev' || '' }}
+          - environment: ${{ github.event.inputs.environment != 'all' && github.event.inputs.environment != 'prod' && 'prod' || '' }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Drift Detection
+        uses: ./.github/actions/drift-detect
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: './test'
+          # OIDC Authentication (Recommended)
+          use_oidc: ${{ vars.USE_OIDC || 'false' }}
+          azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          # Legacy Authentication (Fallback)
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          # Backend
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: 'test-${{ matrix.environment }}.tfstate'
+          var_file: 'environments/${{ matrix.environment }}.tfvars'
+          environment: ${{ matrix.environment }}
+          # Alerting
+          create_issue: ${{ github.event.inputs.create_issue || 'true' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_drift: false
+
+  # =========================================================================
+  # SUMMARY NOTIFICATION
+  # =========================================================================
+  notify:
+    name: '📢 Notify'
+    runs-on: ubuntu-latest
+    needs: detect-drift
+    if: always()
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Results
+        id: check
+        run: |
+          if [ "${{ needs.detect-drift.result }}" == "failure" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=Drift detection failed or drift was detected" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=All environments are in sync with Terraform configuration" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Notification
+        if: vars.SLACK_WEBHOOK_URL != ''
+        uses: ./.github/actions/notification
+        with:
+          type: slack
+          webhook_url: ${{ vars.SLACK_WEBHOOK_URL }}
+          title: 'Drift Detection Complete'
+          message: ${{ steps.check.outputs.message }}
+          status: ${{ steps.check.outputs.status }}
+          environment: 'all'
+
+      - name: Summary
+        run: |
+          echo "## 🔍 Drift Detection Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Overall | ${{ needs.detect-drift.result }} |" >> $GITHUB_STEP_SUMMARY

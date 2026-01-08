@@ -1,11 +1,19 @@
 name: 'Module Version Check'
-description: 'Check and manage module versions'
+description: 'Check and manage Terraform module and provider versions'
 
 inputs:
   working_directory:
     description: 'Working directory'
     required: false
     default: '.'
+  terraform_version:
+    description: 'Terraform version'
+    required: false
+    default: '1.9.0'
+  check_updates:
+    description: 'Check for available updates'
+    required: false
+    default: 'true'
 
 outputs:
   terraform_version:
@@ -13,12 +21,21 @@ outputs:
     value: ${{ steps.versions.outputs.terraform }}
   provider_versions:
     description: 'Provider versions JSON'
-    value: ${{ steps.versions.outputs.providers }}
+    value: ${{ steps.providers.outputs.providers }}
+  has_updates:
+    description: 'Whether updates are available'
+    value: ${{ steps.updates.outputs.has_updates }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Check Versions
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+        terraform_wrapper: false
+
+    - name: Get Terraform Version
       id: versions
       shell: bash
       working-directory: ${{ inputs.working_directory }}
@@ -33,30 +50,107 @@ runs:
         echo "### Terraform" >> $GITHUB_STEP_SUMMARY
         echo "Version: \`$TF_VERSION\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Get provider versions from lock file
+
+    # FIX: Actually set the providers output
+    - name: Get Provider Versions
+      id: providers
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
         echo "### Providers" >> $GITHUB_STEP_SUMMARY
-        echo "| Provider | Version |" >> $GITHUB_STEP_SUMMARY
-        echo "|----------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Provider | Version | Constraints |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|---------|-------------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Initialize JSON object
+        PROVIDERS_JSON="{}"
         
         if [ -f ".terraform.lock.hcl" ]; then
-          grep -A1 'provider "' .terraform.lock.hcl | grep -E 'version|provider' | paste - - | while read line; do
-            PROVIDER=$(echo "$line" | grep -oP 'provider "\K[^"]+')
-            VERSION=$(echo "$line" | grep -oP 'version\s*=\s*"\K[^"]+')
-            echo "| $PROVIDER | $VERSION |" >> $GITHUB_STEP_SUMMARY
-          done
+          # Parse lock file for provider versions
+          while IFS= read -r line; do
+            if [[ "$line" =~ provider.*\"(.*)\" ]]; then
+              PROVIDER="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ version.*=.*\"(.*)\" ]] && [ -n "$PROVIDER" ]; then
+              VERSION="${BASH_REMATCH[1]}"
+              # Get constraints from tf files
+              CONSTRAINT=$(grep -rh "version.*=" *.tf 2>/dev/null | grep -oP '~>.*"|>=.*"' | head -1 | tr -d '"' || echo "any")
+              echo "| \`$PROVIDER\` | $VERSION | $CONSTRAINT |" >> $GITHUB_STEP_SUMMARY
+              
+              # Build JSON
+              PROVIDER_NAME=$(basename "$PROVIDER")
+              PROVIDERS_JSON=$(echo "$PROVIDERS_JSON" | jq --arg name "$PROVIDER_NAME" --arg ver "$VERSION" '. + {($name): $ver}')
+              unset PROVIDER
+            fi
+          done < .terraform.lock.hcl
         else
-          echo "| (lock file not found) | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| (lock file not found) | - | - |" >> $GITHUB_STEP_SUMMARY
+          PROVIDERS_JSON="{}"
         fi
         
+        # Output the providers JSON
+        echo "providers=$(echo $PROVIDERS_JSON | jq -c '.')" >> $GITHUB_OUTPUT
         echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Check for module sources
+
+    - name: Get Module Sources
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
         echo "### Modules" >> $GITHUB_STEP_SUMMARY
-        echo "| Module | Source |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Module | Source | Version |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|--------|---------|" >> $GITHUB_STEP_SUMMARY
         
-        grep -rh 'source\s*=' modules/*/main.tf 2>/dev/null | head -20 | while read line; do
-          SOURCE=$(echo "$line" | grep -oP 'source\s*=\s*"\K[^"]+' || echo "-")
-          echo "| local | $SOURCE |" >> $GITHUB_STEP_SUMMARY
-        done || echo "| (no external modules) | - |" >> $GITHUB_STEP_SUMMARY
+        # Find all module blocks
+        FOUND_MODULES=false
+        for tf_file in $(find . -name "*.tf" -type f 2>/dev/null); do
+          # Parse module blocks
+          awk '/^module\s+"/,/^}/' "$tf_file" 2>/dev/null | while read -r line; do
+            if [[ "$line" =~ module.*\"(.*)\" ]]; then
+              MODULE_NAME="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ source.*=.*\"(.*)\" ]]; then
+              SOURCE="${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ version.*=.*\"(.*)\" ]]; then
+              MOD_VERSION="${BASH_REMATCH[1]}"
+            elif [[ "$line" == "}" ]] && [ -n "$MODULE_NAME" ]; then
+              echo "| \`$MODULE_NAME\` | $SOURCE | ${MOD_VERSION:-local} |" >> $GITHUB_STEP_SUMMARY
+              FOUND_MODULES=true
+              unset MODULE_NAME SOURCE MOD_VERSION
+            fi
+          done
+        done
+        
+        if [ "$FOUND_MODULES" != "true" ]; then
+          # Check for local modules
+          if [ -d "modules" ]; then
+            for mod in modules/*/; do
+              if [ -d "$mod" ]; then
+                MOD_NAME=$(basename "$mod")
+                echo "| \`$MOD_NAME\` | ./modules/$MOD_NAME | local |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          else
+            echo "| (no modules found) | - | - |" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+
+    - name: Check for Updates
+      id: updates
+      if: inputs.check_updates == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔄 Update Check" >> $GITHUB_STEP_SUMMARY
+        
+        HAS_UPDATES=false
+        
+        # Check Terraform version
+        LATEST_TF=$(curl -s https://api.github.com/repos/hashicorp/terraform/releases/latest | jq -r '.tag_name' | tr -d 'v' 2>/dev/null || echo "")
+        CURRENT_TF=$(terraform version -json | jq -r '.terraform_version')
+        
+        if [ -n "$LATEST_TF" ] && [ "$LATEST_TF" != "$CURRENT_TF" ]; then
+          echo "- ⬆️ Terraform: $CURRENT_TF → $LATEST_TF available" >> $GITHUB_STEP_SUMMARY
+          HAS_UPDATES=true
+        else
+          echo "- ✅ Terraform is up to date" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "has_updates=$HAS_UPDATES" >> $GITHUB_OUTPUT

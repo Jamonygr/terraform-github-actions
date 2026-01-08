@@ -1,0 +1,249 @@
+name: 'Drift Detection'
+description: 'Detect configuration drift between Terraform state and actual infrastructure'
+
+inputs:
+  terraform_version:
+    description: 'Terraform version'
+    required: false
+    default: '1.9.0'
+  working_directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication
+  azure_credentials:
+    description: 'Azure credentials JSON (legacy)'
+    required: false
+  # Backend Configuration
+  backend_resource_group:
+    description: 'Backend resource group'
+    required: true
+  backend_storage_account:
+    description: 'Backend storage account'
+    required: true
+  backend_container:
+    description: 'Backend container'
+    required: false
+    default: 'tfstate'
+  state_key:
+    description: 'State file key'
+    required: true
+  var_file:
+    description: 'Variables file'
+    required: true
+  environment:
+    description: 'Environment name'
+    required: true
+  # Alerting
+  create_issue:
+    description: 'Create GitHub issue on drift'
+    required: false
+    default: 'true'
+  github_token:
+    description: 'GitHub token for issue creation'
+    required: false
+  fail_on_drift:
+    description: 'Fail the job if drift is detected'
+    required: false
+    default: 'false'
+
+outputs:
+  has_drift:
+    description: 'Whether drift was detected'
+    value: ${{ steps.detect.outputs.has_drift }}
+  drift_resources:
+    description: 'Number of drifted resources'
+    value: ${{ steps.detect.outputs.drift_resources }}
+  issue_number:
+    description: 'Created issue number (if any)'
+    value: ${{ steps.issue.outputs.issue_number }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+        terraform_wrapper: false
+
+    - name: Cache Terraform Plugins
+      uses: actions/cache@v4
+      with:
+        path: ~/.terraform.d/plugin-cache
+        key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+        restore-keys: terraform-${{ runner.os }}-
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true'
+      uses: azure/login@v2
+      with:
+        creds: ${{ inputs.azure_credentials }}
+
+    - name: Set ARM Environment Variables (OIDC)
+      if: inputs.use_oidc == 'true'
+      shell: bash
+      run: |
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ inputs.azure_client_id }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ inputs.azure_subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ inputs.azure_tenant_id }}" >> $GITHUB_ENV
+
+    - name: Set ARM Environment Variables (Legacy)
+      if: inputs.use_oidc != 'true'
+      shell: bash
+      run: |
+        echo "ARM_CLIENT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientId')" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.subscriptionId')" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+
+    - name: Configure Plugin Cache
+      shell: bash
+      run: |
+        mkdir -p ~/.terraform.d/plugin-cache
+        echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+    - name: Terraform Init
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=${{ inputs.backend_resource_group }}" \
+          -backend-config="storage_account_name=${{ inputs.backend_storage_account }}" \
+          -backend-config="container_name=${{ inputs.backend_container }}" \
+          -backend-config="key=${{ inputs.state_key }}"
+
+    - name: Detect Drift
+      id: detect
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set +e
+        
+        # Run plan with refresh to detect drift
+        terraform plan \
+          -var-file="${{ inputs.var_file }}" \
+          -detailed-exitcode \
+          -refresh-only \
+          -no-color 2>&1 | tee drift_output.txt
+        
+        EXITCODE=${PIPESTATUS[0]}
+        
+        if [ $EXITCODE -eq 0 ]; then
+          echo "has_drift=false" >> $GITHUB_OUTPUT
+          echo "drift_resources=0" >> $GITHUB_OUTPUT
+          
+          echo "## ✅ No Drift Detected - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Infrastructure matches Terraform configuration." >> $GITHUB_STEP_SUMMARY
+          
+        elif [ $EXITCODE -eq 2 ]; then
+          echo "has_drift=true" >> $GITHUB_OUTPUT
+          
+          # Count drifted resources
+          DRIFT_COUNT=$(grep -c "has changed" drift_output.txt 2>/dev/null || echo "1")
+          echo "drift_resources=$DRIFT_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "## 🔴 Drift Detected - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **$DRIFT_COUNT resource(s) have drifted from Terraform configuration!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>📄 Drift Details</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat drift_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          
+        else
+          echo "has_drift=false" >> $GITHUB_OUTPUT
+          echo "drift_resources=0" >> $GITHUB_OUTPUT
+          echo "::error::Drift detection failed with exit code $EXITCODE"
+          exit 1
+        fi
+
+    - name: Create Issue for Drift
+      id: issue
+      if: steps.detect.outputs.has_drift == 'true' && inputs.create_issue == 'true' && inputs.github_token != ''
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+          const driftOutput = fs.readFileSync('${{ inputs.working_directory }}/drift_output.txt', 'utf8');
+          
+          const issue = await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🔴 Infrastructure Drift Detected - ${{ inputs.environment }}`,
+            body: `## Drift Detection Report
+          
+          **Environment:** ${{ inputs.environment }}
+          **Detected:** ${new Date().toISOString()}
+          **Resources Affected:** ${{ steps.detect.outputs.drift_resources }}
+          
+          ### Details
+          
+          <details>
+          <summary>Click to expand drift details</summary>
+          
+          \`\`\`
+          ${driftOutput.substring(0, 60000)}
+          \`\`\`
+          
+          </details>
+          
+          ### Recommended Actions
+          
+          1. Review the drift details above
+          2. Determine if the changes were intentional
+          3. Either:
+             - Run \`terraform apply\` to update state to match infrastructure
+             - Run \`terraform apply\` with your configuration to revert infrastructure
+          
+          ---
+          *This issue was automatically created by the drift detection workflow.*
+          `,
+            labels: ['drift', 'infrastructure', '${{ inputs.environment }}']
+          });
+          
+          core.setOutput('issue_number', issue.data.number);
+          console.log(`Created issue #${issue.data.number}`);
+
+    - name: Fail on Drift
+      if: steps.detect.outputs.has_drift == 'true' && inputs.fail_on_drift == 'true'
+      shell: bash
+      run: |
+        echo "::error::Drift detected and fail_on_drift is enabled"
+        exit 1
+
+    - name: Upload Drift Report
+      if: steps.detect.outputs.has_drift == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: drift-report-${{ inputs.environment }}-${{ github.sha }}
+        path: ${{ inputs.working_directory }}/drift_output.txt
+        retention-days: 30

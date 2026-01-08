@@ -1,0 +1,249 @@
+name: 'Notification'
+description: 'Send notifications to Slack, Teams, or Discord'
+
+inputs:
+  # Notification Type
+  type:
+    description: 'Notification type: slack, teams, discord, or webhook'
+    required: true
+  webhook_url:
+    description: 'Webhook URL for the notification service'
+    required: true
+  # Message Content
+  title:
+    description: 'Notification title'
+    required: true
+  message:
+    description: 'Notification message'
+    required: true
+  status:
+    description: 'Status: success, failure, warning, info'
+    required: false
+    default: 'info'
+  # Additional Details
+  environment:
+    description: 'Environment name'
+    required: false
+  details:
+    description: 'Additional details (JSON object)'
+    required: false
+  # Mentions
+  mention_on_failure:
+    description: 'User/channel to mention on failure'
+    required: false
+
+outputs:
+  sent:
+    description: 'Whether notification was sent'
+    value: ${{ steps.send.outputs.sent }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine Color
+      id: color
+      shell: bash
+      run: |
+        case "${{ inputs.status }}" in
+          success)
+            echo "color=#28a745" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+            ;;
+          failure)
+            echo "color=#dc3545" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+            ;;
+          warning)
+            echo "color=#ffc107" >> $GITHUB_OUTPUT
+            echo "emoji=⚠️" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "color=#17a2b8" >> $GITHUB_OUTPUT
+            echo "emoji=ℹ️" >> $GITHUB_OUTPUT
+            ;;
+        esac
+
+    - name: Build Slack Payload
+      id: slack
+      if: inputs.type == 'slack'
+      shell: bash
+      run: |
+        MENTION=""
+        if [ "${{ inputs.status }}" == "failure" ] && [ -n "${{ inputs.mention_on_failure }}" ]; then
+          MENTION="<${{ inputs.mention_on_failure }}> "
+        fi
+        
+        cat > notification_payload.json << EOF
+        {
+          "attachments": [
+            {
+              "color": "${{ steps.color.outputs.color }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.color.outputs.emoji }} ${{ inputs.title }}",
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${MENTION}${{ inputs.message }}"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:* ${{ inputs.environment || 'N/A' }} | *Actor:* ${{ github.actor }} | *Repo:* ${{ github.repository }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        EOF
+
+    - name: Build Teams Payload
+      id: teams
+      if: inputs.type == 'teams'
+      shell: bash
+      run: |
+        cat > notification_payload.json << EOF
+        {
+          "@type": "MessageCard",
+          "@context": "http://schema.org/extensions",
+          "themeColor": "${{ steps.color.outputs.color }}",
+          "summary": "${{ inputs.title }}",
+          "sections": [{
+            "activityTitle": "${{ steps.color.outputs.emoji }} ${{ inputs.title }}",
+            "activitySubtitle": "${{ github.repository }}",
+            "facts": [{
+              "name": "Environment",
+              "value": "${{ inputs.environment || 'N/A' }}"
+            }, {
+              "name": "Actor",
+              "value": "${{ github.actor }}"
+            }, {
+              "name": "Status",
+              "value": "${{ inputs.status }}"
+            }],
+            "text": "${{ inputs.message }}",
+            "markdown": true
+          }],
+          "potentialAction": [{
+            "@type": "OpenUri",
+            "name": "View Workflow",
+            "targets": [{
+              "os": "default",
+              "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }]
+          }]
+        }
+        EOF
+
+    - name: Build Discord Payload
+      id: discord
+      if: inputs.type == 'discord'
+      shell: bash
+      run: |
+        # Convert hex color to decimal
+        HEX_COLOR="${{ steps.color.outputs.color }}"
+        DEC_COLOR=$((16#${HEX_COLOR:1}))
+        
+        cat > notification_payload.json << EOF
+        {
+          "embeds": [{
+            "title": "${{ steps.color.outputs.emoji }} ${{ inputs.title }}",
+            "description": "${{ inputs.message }}",
+            "color": $DEC_COLOR,
+            "fields": [
+              {
+                "name": "Environment",
+                "value": "${{ inputs.environment || 'N/A' }}",
+                "inline": true
+              },
+              {
+                "name": "Actor",
+                "value": "${{ github.actor }}",
+                "inline": true
+              },
+              {
+                "name": "Status",
+                "value": "${{ inputs.status }}",
+                "inline": true
+              }
+            ],
+            "footer": {
+              "text": "${{ github.repository }}"
+            },
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }]
+        }
+        EOF
+
+    - name: Build Generic Webhook Payload
+      id: webhook
+      if: inputs.type == 'webhook'
+      shell: bash
+      run: |
+        cat > notification_payload.json << EOF
+        {
+          "title": "${{ inputs.title }}",
+          "message": "${{ inputs.message }}",
+          "status": "${{ inputs.status }}",
+          "environment": "${{ inputs.environment }}",
+          "repository": "${{ github.repository }}",
+          "actor": "${{ github.actor }}",
+          "run_id": "${{ github.run_id }}",
+          "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        }
+        EOF
+
+    - name: Send Notification
+      id: send
+      shell: bash
+      run: |
+        set +e
+        
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -d @notification_payload.json \
+          "${{ inputs.webhook_url }}")
+        
+        if [ "$RESPONSE" -ge 200 ] && [ "$RESPONSE" -lt 300 ]; then
+          echo "sent=true" >> $GITHUB_OUTPUT
+          echo "## ✅ Notification Sent" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Type | ${{ inputs.type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ inputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Response | $RESPONSE |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "sent=false" >> $GITHUB_OUTPUT
+          echo "## ⚠️ Notification Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "HTTP Response: $RESPONSE" >> $GITHUB_STEP_SUMMARY
+          # Don't fail the workflow for notification failures
+        fi

@@ -1,10 +1,26 @@
 name: 'State Backup'
-description: 'Backup Terraform state before changes'
+description: 'Backup Terraform state before changes with OIDC or legacy auth support'
 
 inputs:
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication (recommended)'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication (Backward Compatible)
   azure_credentials:
-    description: 'Azure credentials JSON'
-    required: true
+    description: 'Azure credentials JSON (legacy - use OIDC instead)'
+    required: false
+  # State Configuration
   storage_account:
     description: 'State storage account'
     required: true
@@ -18,38 +34,162 @@ inputs:
   state_key:
     description: 'State file key'
     required: true
+  # Backup Options
+  backup_prefix:
+    description: 'Prefix for backup name'
+    required: false
+    default: 'backup'
+  retention_days:
+    description: 'Days to retain backups (0 = forever)'
+    required: false
+    default: '30'
+
+outputs:
+  backup_name:
+    description: 'Name of the backup blob'
+    value: ${{ steps.backup.outputs.backup_name }}
+  backup_url:
+    description: 'URL to the backup blob'
+    value: ${{ steps.backup.outputs.backup_url }}
+  success:
+    description: 'Whether backup was successful'
+    value: ${{ steps.backup.outputs.success }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Azure Login
+    - name: Validate Authentication
+      shell: bash
+      run: |
+        if [ "${{ inputs.use_oidc }}" == "true" ]; then
+          if [ -z "${{ inputs.azure_client_id }}" ] || [ -z "${{ inputs.azure_tenant_id }}" ] || [ -z "${{ inputs.azure_subscription_id }}" ]; then
+            echo "::error::OIDC authentication requires azure_client_id, azure_tenant_id, and azure_subscription_id"
+            exit 1
+          fi
+        else
+          if [ -z "${{ inputs.azure_credentials }}" ]; then
+            echo "::error::Legacy authentication requires azure_credentials JSON"
+            exit 1
+          fi
+        fi
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true'
       uses: azure/login@v2
       with:
         creds: ${{ inputs.azure_credentials }}
 
-    - name: Backup State
-      shell: bash
-      run: |
-        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-        BACKUP_NAME="${{ inputs.state_key }}.backup-${TIMESTAMP}"
-        
-        # Copy current state to backup
-        az storage blob copy start \
-          --account-name ${{ inputs.storage_account }} \
-          --destination-container ${{ inputs.container }}-backups \
-          --destination-blob "$BACKUP_NAME" \
-          --source-account-name ${{ inputs.storage_account }} \
-          --source-container ${{ inputs.container }} \
-          --source-blob ${{ inputs.state_key }} \
-          2>/dev/null || true
-        
-        echo "## 💾 State Backup" >> $GITHUB_STEP_SUMMARY
-        echo "Backed up state to: $BACKUP_NAME" >> $GITHUB_STEP_SUMMARY
-
-    - name: Create Backup Container if Missing
+    # FIX: Create backup container BEFORE attempting to copy
+    - name: Create Backup Container
       shell: bash
       run: |
         az storage container create \
           --account-name ${{ inputs.storage_account }} \
           --name ${{ inputs.container }}-backups \
+          --auth-mode login \
           2>/dev/null || true
+        echo "✅ Backup container ready" >> $GITHUB_STEP_SUMMARY
+
+    - name: Backup State
+      id: backup
+      shell: bash
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        BACKUP_NAME="${{ inputs.state_key }}.${{ inputs.backup_prefix }}-${TIMESTAMP}"
+        
+        # Check if source state exists
+        STATE_EXISTS=$(az storage blob exists \
+          --account-name ${{ inputs.storage_account }} \
+          --container-name ${{ inputs.container }} \
+          --name ${{ inputs.state_key }} \
+          --auth-mode login \
+          --query "exists" -o tsv 2>/dev/null || echo "false")
+        
+        if [ "$STATE_EXISTS" == "true" ]; then
+          # Copy current state to backup
+          az storage blob copy start \
+            --account-name ${{ inputs.storage_account }} \
+            --destination-container ${{ inputs.container }}-backups \
+            --destination-blob "$BACKUP_NAME" \
+            --source-account-name ${{ inputs.storage_account }} \
+            --source-container ${{ inputs.container }} \
+            --source-blob ${{ inputs.state_key }} \
+            --auth-mode login
+          
+          # Verify backup was created
+          BACKUP_EXISTS=$(az storage blob exists \
+            --account-name ${{ inputs.storage_account }} \
+            --container-name ${{ inputs.container }}-backups \
+            --name "$BACKUP_NAME" \
+            --auth-mode login \
+            --query "exists" -o tsv)
+          
+          if [ "$BACKUP_EXISTS" == "true" ]; then
+            BACKUP_URL="https://${{ inputs.storage_account }}.blob.core.windows.net/${{ inputs.container }}-backups/$BACKUP_NAME"
+            echo "backup_name=$BACKUP_NAME" >> $GITHUB_OUTPUT
+            echo "backup_url=$BACKUP_URL" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+            
+            echo "## 💾 State Backup Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 📄 Backup Name | \`$BACKUP_NAME\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| 📦 Container | \`${{ inputs.container }}-backups\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🕐 Timestamp | $(date -u +"%Y-%m-%d %H:%M:%S UTC") |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::error::Backup verification failed"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        else
+          echo "backup_name=" >> $GITHUB_OUTPUT
+          echo "backup_url=" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "## 💾 State Backup" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ℹ️ No existing state file to backup (first deployment)" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Cleanup Old Backups
+      if: inputs.retention_days != '0'
+      shell: bash
+      run: |
+        RETENTION_DATE=$(date -d "${{ inputs.retention_days }} days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                        date -v-${{ inputs.retention_days }}d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                        echo "")
+        
+        if [ -n "$RETENTION_DATE" ]; then
+          echo "🧹 Cleaning backups older than ${{ inputs.retention_days }} days" >> $GITHUB_STEP_SUMMARY
+          
+          # List and delete old backups
+          OLD_BACKUPS=$(az storage blob list \
+            --account-name ${{ inputs.storage_account }} \
+            --container-name ${{ inputs.container }}-backups \
+            --auth-mode login \
+            --query "[?properties.lastModified < '$RETENTION_DATE'].name" -o tsv 2>/dev/null || echo "")
+          
+          if [ -n "$OLD_BACKUPS" ]; then
+            COUNT=0
+            for blob in $OLD_BACKUPS; do
+              az storage blob delete \
+                --account-name ${{ inputs.storage_account }} \
+                --container-name ${{ inputs.container }}-backups \
+                --name "$blob" \
+                --auth-mode login \
+                2>/dev/null || true
+              COUNT=$((COUNT + 1))
+            done
+            echo "🗑️ Deleted $COUNT old backups" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No old backups to clean" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi

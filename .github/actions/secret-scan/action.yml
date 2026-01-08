@@ -3,38 +3,143 @@ description: 'Scan for leaked secrets using Gitleaks'
 
 inputs:
   scan_depth:
-    description: 'Number of commits to scan'
+    description: 'Number of commits to scan (0 = all history)'
     required: false
     default: '0'
   config_path:
     description: 'Path to gitleaks config'
     required: false
     default: '.gitleaks.toml'
+  fail_on_leak:
+    description: 'Fail the job if secrets are found'
+    required: false
+    default: 'false'
+  upload_sarif:
+    description: 'Upload SARIF to GitHub Security tab'
+    required: false
+    default: 'true'
+  scan_path:
+    description: 'Path to scan'
+    required: false
+    default: '.'
 
 outputs:
   leaks_found:
     description: 'Whether leaks were found'
     value: ${{ steps.scan.outputs.leaks_found }}
+  leak_count:
+    description: 'Number of leaks found'
+    value: ${{ steps.scan.outputs.leak_count }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Run Gitleaks
-      id: scan
-      uses: gitleaks/gitleaks-action@v2
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      continue-on-error: true
-
-    - name: Report Results
+    - name: Install Gitleaks
       shell: bash
       run: |
-        if [ "${{ steps.scan.outcome }}" == "failure" ]; then
-          echo "## 🚨 Secret Scan - LEAKS DETECTED" >> $GITHUB_STEP_SUMMARY
-          echo "leaks_found=true" >> $GITHUB_OUTPUT
-          echo "⚠️ Potential secrets found in code. Review and rotate immediately!" >> $GITHUB_STEP_SUMMARY
+        GITLEAKS_VERSION="8.18.4"
+        curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz
+        chmod +x gitleaks
+        sudo mv gitleaks /usr/local/bin/
+        echo "✅ Gitleaks v${GITLEAKS_VERSION} installed" >> $GITHUB_STEP_SUMMARY
+
+    - name: Create Default Config
+      shell: bash
+      run: |
+        if [ ! -f "${{ inputs.config_path }}" ]; then
+          cat > .gitleaks.toml << 'EOF'
+        title = "Gitleaks Custom Rules"
+
+        [allowlist]
+        description = "Allowlist for false positives"
+        paths = [
+          '''\.terraform/''',
+          '''\.git/''',
+          '''node_modules/''',
+          '''vendor/''',
+          '''\.terraform\.lock\.hcl$'''
+        ]
+
+        # Terraform specific rules
+        [[rules]]
+        id = "terraform-sensitive-variable"
+        description = "Terraform sensitive variable without sensitive flag"
+        regex = '''(?i)(password|secret|token|key|credential)\s*=\s*"[^"]{8,}"'''
+        path = '''\.tf$'''
+        EOF
+          echo "📝 Created default gitleaks config" >> $GITHUB_STEP_SUMMARY
         else
-          echo "## ✅ Secret Scan - Clean" >> $GITHUB_STEP_SUMMARY
-          echo "leaks_found=false" >> $GITHUB_OUTPUT
-          echo "No secrets detected in code." >> $GITHUB_STEP_SUMMARY
+          echo "📝 Using existing config: ${{ inputs.config_path }}" >> $GITHUB_STEP_SUMMARY
         fi
+
+    - name: Run Gitleaks Scan
+      id: scan
+      shell: bash
+      run: |
+        set +e
+        
+        # Build scan arguments
+        ARGS="detect --source ${{ inputs.scan_path }} --report-format sarif --report-path gitleaks-report.sarif"
+        
+        # Add config if exists
+        if [ -f "${{ inputs.config_path }}" ]; then
+          ARGS="$ARGS --config ${{ inputs.config_path }}"
+        fi
+        
+        # Add depth if specified
+        if [ "${{ inputs.scan_depth }}" != "0" ]; then
+          ARGS="$ARGS --log-opts=-n${{ inputs.scan_depth }}"
+        fi
+        
+        # Run scan
+        gitleaks $ARGS --verbose 2>&1 | tee gitleaks-output.txt
+        EXITCODE=$?
+        
+        if [ $EXITCODE -eq 0 ]; then
+          echo "leaks_found=false" >> $GITHUB_OUTPUT
+          echo "leak_count=0" >> $GITHUB_OUTPUT
+          echo "## ✅ Secret Scan - Clean" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No secrets detected in the codebase." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "leaks_found=true" >> $GITHUB_OUTPUT
+          
+          # Count leaks
+          LEAK_COUNT=$(grep -c "Secret detected" gitleaks-output.txt 2>/dev/null || echo "1")
+          echo "leak_count=$LEAK_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "## 🚨 Secret Scan - LEAKS DETECTED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **$LEAK_COUNT potential secret(s) found!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Review and rotate any exposed credentials immediately." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>📄 Scan Details</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          head -100 gitleaks-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.fail_on_leak }}" == "true" ]; then
+            exit 1
+          fi
+        fi
+
+    - name: Upload SARIF
+      if: inputs.upload_sarif == 'true' && hashFiles('gitleaks-report.sarif') != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: gitleaks-report.sarif
+        category: gitleaks
+      continue-on-error: true
+
+    - name: Upload Report Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: gitleaks-report-${{ github.sha }}
+        path: |
+          gitleaks-report.sarif
+          gitleaks-output.txt
+        retention-days: 30
+        if-no-files-found: ignore

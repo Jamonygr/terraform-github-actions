@@ -1,0 +1,160 @@
+name: 'PR Comment'
+description: 'Post Terraform plan, cost, and security summaries to pull requests'
+
+inputs:
+  github_token:
+    description: 'GitHub token for PR comments'
+    required: true
+  plan_file:
+    description: 'Path to plan output file'
+    required: false
+    default: 'plan_output.txt'
+  cost_file:
+    description: 'Path to cost estimate file'
+    required: false
+  security_file:
+    description: 'Path to security scan results'
+    required: false
+  environment:
+    description: 'Environment name'
+    required: true
+  plan_add:
+    description: 'Resources to add'
+    required: false
+    default: '0'
+  plan_change:
+    description: 'Resources to change'
+    required: false
+    default: '0'
+  plan_destroy:
+    description: 'Resources to destroy'
+    required: false
+    default: '0'
+  update_existing:
+    description: 'Update existing comment instead of creating new'
+    required: false
+    default: 'true'
+  collapse_plan:
+    description: 'Collapse plan output in details tag'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check if PR
+      id: check
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          echo "is_pr=true" >> $GITHUB_OUTPUT
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+        else
+          echo "is_pr=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build Comment Body
+      id: body
+      if: steps.check.outputs.is_pr == 'true'
+      shell: bash
+      run: |
+        # Start building comment
+        cat > pr_comment.md << 'HEADER'
+        ## 🔄 Terraform Plan - ${{ inputs.environment }}
+        
+        ### 📊 Summary
+        
+        | Action | Count |
+        |--------|-------|
+        HEADER
+        
+        echo "| ➕ Add | ${{ inputs.plan_add }} |" >> pr_comment.md
+        echo "| 🔄 Change | ${{ inputs.plan_change }} |" >> pr_comment.md
+        echo "| ➖ Destroy | ${{ inputs.plan_destroy }} |" >> pr_comment.md
+        
+        # Add plan output
+        if [ -f "${{ inputs.plan_file }}" ]; then
+          echo "" >> pr_comment.md
+          echo "### 📋 Plan Output" >> pr_comment.md
+          echo "" >> pr_comment.md
+          
+          if [ "${{ inputs.collapse_plan }}" == "true" ]; then
+            echo "<details><summary>Click to expand plan</summary>" >> pr_comment.md
+            echo "" >> pr_comment.md
+          fi
+          
+          echo '```hcl' >> pr_comment.md
+          # Limit to last 200 lines to avoid comment size limits
+          tail -200 "${{ inputs.plan_file }}" >> pr_comment.md
+          echo '```' >> pr_comment.md
+          
+          if [ "${{ inputs.collapse_plan }}" == "true" ]; then
+            echo "</details>" >> pr_comment.md
+          fi
+        fi
+        
+        # Add cost estimate if available
+        if [ -f "${{ inputs.cost_file }}" ]; then
+          echo "" >> pr_comment.md
+          echo "### 💰 Cost Estimate" >> pr_comment.md
+          echo "" >> pr_comment.md
+          echo "<details><summary>Click to expand costs</summary>" >> pr_comment.md
+          echo "" >> pr_comment.md
+          echo '```' >> pr_comment.md
+          cat "${{ inputs.cost_file }}" >> pr_comment.md
+          echo '```' >> pr_comment.md
+          echo "</details>" >> pr_comment.md
+        fi
+        
+        # Add security results if available
+        if [ -f "${{ inputs.security_file }}" ]; then
+          echo "" >> pr_comment.md
+          echo "### 🔒 Security Scan" >> pr_comment.md
+          echo "" >> pr_comment.md
+          echo "<details><summary>Click to expand security results</summary>" >> pr_comment.md
+          echo "" >> pr_comment.md
+          echo '```' >> pr_comment.md
+          head -100 "${{ inputs.security_file }}" >> pr_comment.md
+          echo '```' >> pr_comment.md
+          echo "</details>" >> pr_comment.md
+        fi
+        
+        # Add footer
+        echo "" >> pr_comment.md
+        echo "---" >> pr_comment.md
+        echo "*Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*" >> pr_comment.md
+
+    - name: Find Existing Comment
+      id: find
+      if: steps.check.outputs.is_pr == 'true' && inputs.update_existing == 'true'
+      uses: peter-evans/find-comment@v3
+      with:
+        issue-number: ${{ steps.check.outputs.pr_number }}
+        comment-author: 'github-actions[bot]'
+        body-includes: 'Terraform Plan - ${{ inputs.environment }}'
+
+    - name: Create or Update Comment
+      if: steps.check.outputs.is_pr == 'true'
+      uses: peter-evans/create-or-update-comment@v4
+      with:
+        token: ${{ inputs.github_token }}
+        comment-id: ${{ steps.find.outputs.comment-id }}
+        issue-number: ${{ steps.check.outputs.pr_number }}
+        body-path: pr_comment.md
+        edit-mode: replace
+
+    - name: Comment Posted
+      if: steps.check.outputs.is_pr == 'true'
+      shell: bash
+      run: |
+        echo "## 💬 PR Comment Posted" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Comment posted to PR #${{ steps.check.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Not a PR
+      if: steps.check.outputs.is_pr != 'true'
+      shell: bash
+      run: |
+        echo "## ℹ️ PR Comment Skipped" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Not a pull request event - skipping comment" >> $GITHUB_STEP_SUMMARY

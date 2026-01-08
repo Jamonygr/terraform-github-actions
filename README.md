@@ -29,16 +29,21 @@ Reusable GitHub Actions for Terraform workflows. Includes plan, apply, validate,
 
 | Feature | Description |
 |---------|-------------|
+| **� OIDC Authentication** | Secure Azure authentication without long-lived secrets |
 | **🔄 Plan & Apply** | Safe infrastructure changes with plan review and approval gates |
 | **🔒 Security Scanning** | Integrated tfsec, Checkov, and TFLint for compliance |
 | **💰 Cost Estimation** | Infracost integration for cost visibility |
 | **📊 Metrics & Reporting** | Resource inventory, change logs, and dependency graphs |
 | **🧪 Testing** | Terratest integration for infrastructure testing |
+| **🔍 Drift Detection** | Scheduled detection of infrastructure drift |
 | **🔐 Secret Scanning** | Detect hardcoded secrets before deployment |
 | **📝 Documentation** | Auto-generate terraform-docs |
-| **💾 State Backup** | Automated state file backups |
+| **💾 State Backup & Restore** | Automated state file backups with restore capability |
+| **💬 PR Comments** | Automatic plan/cost/security summaries on pull requests |
+| **📢 Notifications** | Slack, Teams, Discord integration |
 | **🏷️ Module Versioning** | Semantic versioning for modules |
 | **🚨 Policy Checks** | OPA/Sentinel policy validation |
+| **⚡ Plugin Caching** | Faster builds with Terraform plugin caching |
 
 ---
 
@@ -54,9 +59,32 @@ git clone https://github.com/Jamonygr/terraform-github-actions.git
 cp -r terraform-github-actions/.github your-terraform-project/
 ```
 
-### 2. Set Up Required Secrets
+### 2. Set Up Authentication
 
-Add these secrets to your GitHub repository:
+#### Option A: OIDC (Recommended) 🔐
+
+Add these **Variables** to your GitHub repository:
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `AZURE_CLIENT_ID` | Azure AD Application (Client) ID | ✅ Yes |
+| `AZURE_TENANT_ID` | Azure AD Tenant ID | ✅ Yes |
+| `AZURE_SUBSCRIPTION_ID` | Azure Subscription ID | ✅ Yes |
+| `USE_OIDC` | Set to `true` | ✅ Yes |
+
+Add these **Secrets**:
+
+| Secret | Description | Required |
+|--------|-------------|----------|
+| `TF_STATE_RG` | Terraform state resource group | ✅ Yes |
+| `TF_STATE_SA` | Terraform state storage account | ✅ Yes |
+| `INFRACOST_API_KEY` | Infracost API key | ❌ Optional |
+
+See [SETUP.md](.github/SETUP.md) for detailed OIDC configuration instructions.
+
+#### Option B: Service Principal (Legacy)
+
+Add these **Secrets** to your GitHub repository:
 
 | Secret | Description | Required |
 |--------|-------------|----------|
@@ -82,18 +110,34 @@ git push
 
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
+| [**setup**](.github/actions/setup/) | Shared Terraform setup with caching | `terraform_version`, `use_oidc` |
 | [**validate**](.github/actions/validate/) | Terraform format and validate | `working_directory` |
-| [**plan**](.github/actions/plan/) | Initialize and create execution plan | `azure_credentials`, `var_file`, `state_key` |
-| [**apply**](.github/actions/apply/) | Apply Terraform changes | `azure_credentials`, `auto_approve` |
-| [**destroy**](.github/actions/destroy/) | Destroy infrastructure | `azure_credentials`, `confirm` |
+| [**plan**](.github/actions/plan/) | Initialize and create execution plan | `use_oidc`, `var_file`, `state_key` |
+| [**apply**](.github/actions/apply/) | Apply Terraform changes | `use_oidc`, `plan_artifact` |
+| [**destroy**](.github/actions/destroy/) | Destroy infrastructure | `use_oidc`, `confirm: DESTROY` |
 
 ### Security Actions
 
 | Action | Description | Tools Used |
 |--------|-------------|------------|
 | [**security**](.github/actions/security/) | Security scanning | tfsec, Checkov, TFLint |
-| [**secret-scan**](.github/actions/secret-scan/) | Detect hardcoded secrets | gitleaks, truffleHog |
-| [**policy-check**](.github/actions/policy-check/) | Policy validation | OPA, Sentinel |
+| [**secret-scan**](.github/actions/secret-scan/) | Detect hardcoded secrets | Gitleaks with SARIF upload |
+| [**policy-check**](.github/actions/policy-check/) | Policy validation | OPA, Conftest |
+
+### State Management Actions
+
+| Action | Description | Key Features |
+|--------|-------------|--------------|
+| [**state-backup**](.github/actions/state-backup/) | Backup state files | Auto-cleanup, retention policy |
+| [**state-restore**](.github/actions/state-restore/) | Restore from backup | List backups, confirm required |
+| [**drift-detect**](.github/actions/drift-detect/) | Detect infrastructure drift | Auto-create issues |
+
+### Communication Actions
+
+| Action | Description | Supported |
+|--------|-------------|-----------|
+| [**pr-comment**](.github/actions/pr-comment/) | Post summaries to PRs | Plan, cost, security |
+| [**notification**](.github/actions/notification/) | Send notifications | Slack, Teams, Discord |
 
 ### Utility Actions
 
@@ -105,8 +149,7 @@ git push
 | [**resource-inventory**](.github/actions/resource-inventory/) | List managed resources | Resource report |
 | [**changelog**](.github/actions/changelog/) | Generate change log | CHANGELOG.md |
 | [**metrics**](.github/actions/metrics/) | Pipeline metrics | Duration, resource counts |
-| [**state-backup**](.github/actions/state-backup/) | Backup state files | Artifact upload |
-| [**module-version**](.github/actions/module-version/) | Module versioning | Semantic version |
+| [**module-version**](.github/actions/module-version/) | Module versioning | Versions JSON, update check |
 | [**terratest**](.github/actions/terratest/) | Infrastructure testing | Test results |
 
 ---

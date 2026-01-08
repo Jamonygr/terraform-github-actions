@@ -1,0 +1,149 @@
+name: 'Terraform Setup'
+description: 'Shared setup action with Terraform, Azure auth, and caching'
+
+inputs:
+  terraform_version:
+    description: 'Terraform version'
+    required: false
+    default: '1.9.0'
+  working_directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication (recommended)'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication
+  azure_credentials:
+    description: 'Azure credentials JSON (legacy)'
+    required: false
+  # Backend Configuration
+  backend_resource_group:
+    description: 'Backend resource group'
+    required: false
+  backend_storage_account:
+    description: 'Backend storage account'
+    required: false
+  backend_container:
+    description: 'Backend container'
+    required: false
+    default: 'tfstate'
+  state_key:
+    description: 'State file key'
+    required: false
+  # Options
+  init_backend:
+    description: 'Initialize with backend'
+    required: false
+    default: 'true'
+
+outputs:
+  terraform_version:
+    description: 'Installed Terraform version'
+    value: ${{ steps.version.outputs.version }}
+  cache_hit:
+    description: 'Whether cache was hit'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+        terraform_wrapper: false
+
+    - name: Get Terraform Version
+      id: version
+      shell: bash
+      run: |
+        VERSION=$(terraform version -json | jq -r '.terraform_version')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Configure Plugin Cache Directory
+      shell: bash
+      run: |
+        mkdir -p ~/.terraform.d/plugin-cache
+        echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+    - name: Cache Terraform Plugins
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.terraform.d/plugin-cache
+        key: terraform-plugins-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+        restore-keys: |
+          terraform-plugins-${{ runner.os }}-
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true' && inputs.azure_client_id != ''
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true' && inputs.azure_credentials != ''
+      uses: azure/login@v2
+      with:
+        creds: ${{ inputs.azure_credentials }}
+
+    - name: Set ARM Environment Variables (OIDC)
+      if: inputs.use_oidc == 'true' && inputs.azure_client_id != ''
+      shell: bash
+      run: |
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ inputs.azure_client_id }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ inputs.azure_subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ inputs.azure_tenant_id }}" >> $GITHUB_ENV
+
+    - name: Set ARM Environment Variables (Legacy)
+      if: inputs.use_oidc != 'true' && inputs.azure_credentials != ''
+      shell: bash
+      run: |
+        echo "ARM_CLIENT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientId')" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.subscriptionId')" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+
+    - name: Terraform Init (with backend)
+      if: inputs.init_backend == 'true' && inputs.backend_storage_account != ''
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=${{ inputs.backend_resource_group }}" \
+          -backend-config="storage_account_name=${{ inputs.backend_storage_account }}" \
+          -backend-config="container_name=${{ inputs.backend_container }}" \
+          -backend-config="key=${{ inputs.state_key }}"
+
+    - name: Terraform Init (local backend)
+      if: inputs.init_backend == 'true' && inputs.backend_storage_account == ''
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        terraform init -backend=false
+
+    - name: Setup Summary
+      shell: bash
+      run: |
+        echo "### 🔧 Terraform Setup" >> $GITHUB_STEP_SUMMARY
+        echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Version | ${{ steps.version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Cache | ${{ steps.cache.outputs.cache-hit == 'true' && '✅ Hit' || '❌ Miss' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Auth | ${{ inputs.use_oidc == 'true' && 'OIDC' || 'Legacy' }} |" >> $GITHUB_STEP_SUMMARY

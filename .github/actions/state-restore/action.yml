@@ -1,0 +1,229 @@
+name: 'State Restore'
+description: 'Restore Terraform state from a backup'
+
+inputs:
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication
+  azure_credentials:
+    description: 'Azure credentials JSON (legacy)'
+    required: false
+  # State Configuration
+  storage_account:
+    description: 'State storage account'
+    required: true
+  resource_group:
+    description: 'State resource group'
+    required: true
+  container:
+    description: 'State container'
+    required: false
+    default: 'tfstate'
+  state_key:
+    description: 'State file key to restore to'
+    required: true
+  backup_name:
+    description: 'Backup blob name to restore from (leave empty to list available)'
+    required: false
+  confirm:
+    description: 'Must be RESTORE to confirm'
+    required: true
+
+outputs:
+  restored:
+    description: 'Whether restore was successful'
+    value: ${{ steps.restore.outputs.restored }}
+  backup_used:
+    description: 'Name of backup that was restored'
+    value: ${{ steps.restore.outputs.backup_used }}
+  available_backups:
+    description: 'List of available backups (if backup_name not specified)'
+    value: ${{ steps.list.outputs.backups }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate Confirmation
+      shell: bash
+      run: |
+        if [ "${{ inputs.confirm }}" != "RESTORE" ]; then
+          echo "## ❌ Restore NOT Confirmed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To restore state, you must type **RESTORE** in the confirmation field." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ This is a safety measure to prevent accidental state corruption." >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
+
+    - name: Validate Authentication
+      shell: bash
+      run: |
+        if [ "${{ inputs.use_oidc }}" == "true" ]; then
+          if [ -z "${{ inputs.azure_client_id }}" ] || [ -z "${{ inputs.azure_tenant_id }}" ] || [ -z "${{ inputs.azure_subscription_id }}" ]; then
+            echo "::error::OIDC authentication requires azure_client_id, azure_tenant_id, and azure_subscription_id"
+            exit 1
+          fi
+        else
+          if [ -z "${{ inputs.azure_credentials }}" ]; then
+            echo "::error::Legacy authentication requires azure_credentials JSON"
+            exit 1
+          fi
+        fi
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true'
+      uses: azure/login@v2
+      with:
+        creds: ${{ inputs.azure_credentials }}
+
+    - name: List Available Backups
+      id: list
+      shell: bash
+      run: |
+        echo "## 📋 Available Backups" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Backup Name | Last Modified | Size |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------------|---------------|------|" >> $GITHUB_STEP_SUMMARY
+        
+        # List backups for this state key
+        BACKUPS=$(az storage blob list \
+          --account-name ${{ inputs.storage_account }} \
+          --container-name ${{ inputs.container }}-backups \
+          --auth-mode login \
+          --prefix "${{ inputs.state_key }}." \
+          --query "[].{name:name, modified:properties.lastModified, size:properties.contentLength}" \
+          -o json 2>/dev/null || echo "[]")
+        
+        echo "$BACKUPS" | jq -r '.[] | "| \(.name) | \(.modified) | \(.size) bytes |"' >> $GITHUB_STEP_SUMMARY || true
+        
+        # Output as JSON for potential use
+        echo "backups=$(echo $BACKUPS | jq -c '.')" >> $GITHUB_OUTPUT
+        
+        # Check if any backups exist
+        BACKUP_COUNT=$(echo "$BACKUPS" | jq 'length')
+        if [ "$BACKUP_COUNT" == "0" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ No backups found for state key: ${{ inputs.state_key }}" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Select Backup
+      id: select
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.backup_name }}" ]; then
+          echo "backup=${{ inputs.backup_name }}" >> $GITHUB_OUTPUT
+        else
+          # Get the most recent backup
+          LATEST=$(az storage blob list \
+            --account-name ${{ inputs.storage_account }} \
+            --container-name ${{ inputs.container }}-backups \
+            --auth-mode login \
+            --prefix "${{ inputs.state_key }}." \
+            --query "sort_by([].{name:name, modified:properties.lastModified}, &modified)[-1].name" \
+            -o tsv 2>/dev/null || echo "")
+          
+          if [ -z "$LATEST" ]; then
+            echo "::error::No backups found for state key: ${{ inputs.state_key }}"
+            exit 1
+          fi
+          
+          echo "backup=$LATEST" >> $GITHUB_OUTPUT
+          echo "ℹ️ Using latest backup: $LATEST" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Backup Current State Before Restore
+      shell: bash
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        BACKUP_NAME="${{ inputs.state_key }}.pre-restore-${TIMESTAMP}"
+        
+        # Check if current state exists
+        STATE_EXISTS=$(az storage blob exists \
+          --account-name ${{ inputs.storage_account }} \
+          --container-name ${{ inputs.container }} \
+          --name ${{ inputs.state_key }} \
+          --auth-mode login \
+          --query "exists" -o tsv 2>/dev/null || echo "false")
+        
+        if [ "$STATE_EXISTS" == "true" ]; then
+          az storage blob copy start \
+            --account-name ${{ inputs.storage_account }} \
+            --destination-container ${{ inputs.container }}-backups \
+            --destination-blob "$BACKUP_NAME" \
+            --source-account-name ${{ inputs.storage_account }} \
+            --source-container ${{ inputs.container }} \
+            --source-blob ${{ inputs.state_key }} \
+            --auth-mode login
+          
+          echo "💾 Current state backed up as: $BACKUP_NAME" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Restore State
+      id: restore
+      shell: bash
+      run: |
+        BACKUP_TO_RESTORE="${{ steps.select.outputs.backup }}"
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🔄 Restoring State" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Restoring from: \`$BACKUP_TO_RESTORE\`" >> $GITHUB_STEP_SUMMARY
+        
+        # Copy backup to state location
+        az storage blob copy start \
+          --account-name ${{ inputs.storage_account }} \
+          --destination-container ${{ inputs.container }} \
+          --destination-blob ${{ inputs.state_key }} \
+          --source-account-name ${{ inputs.storage_account }} \
+          --source-container ${{ inputs.container }}-backups \
+          --source-blob "$BACKUP_TO_RESTORE" \
+          --auth-mode login
+        
+        # Wait for copy to complete
+        sleep 5
+        
+        # Verify restore
+        COPY_STATUS=$(az storage blob show \
+          --account-name ${{ inputs.storage_account }} \
+          --container-name ${{ inputs.container }} \
+          --name ${{ inputs.state_key }} \
+          --auth-mode login \
+          --query "properties.copy.status" -o tsv 2>/dev/null || echo "failed")
+        
+        if [ "$COPY_STATUS" == "success" ] || [ "$COPY_STATUS" == "" ]; then
+          echo "restored=true" >> $GITHUB_OUTPUT
+          echo "backup_used=$BACKUP_TO_RESTORE" >> $GITHUB_OUTPUT
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ State Restored Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📄 Backup Used | \`$BACKUP_TO_RESTORE\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 👤 Restored by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🕐 Time | $(date -u +"%Y-%m-%d %H:%M:%S UTC") |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "restored=false" >> $GITHUB_OUTPUT
+          echo "::error::State restore failed with status: $COPY_STATUS"
+          exit 1
+        fi

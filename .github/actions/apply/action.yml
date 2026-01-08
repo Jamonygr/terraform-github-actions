@@ -1,5 +1,5 @@
 name: 'Terraform Apply'
-description: 'Apply Terraform plan'
+description: 'Apply Terraform plan with OIDC or legacy auth support'
 
 inputs:
   terraform_version:
@@ -10,9 +10,25 @@ inputs:
     description: 'Working directory'
     required: false
     default: '.'
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication (recommended)'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication (Backward Compatible)
   azure_credentials:
-    description: 'Azure credentials JSON'
-    required: true
+    description: 'Azure credentials JSON (legacy - use OIDC instead)'
+    required: false
+  # Backend Configuration
   backend_resource_group:
     description: 'Backend resource group'
     required: true
@@ -32,28 +48,125 @@ inputs:
   plan_artifact:
     description: 'Plan artifact name'
     required: true
+  # Advanced Options
+  lock_timeout:
+    description: 'State lock timeout'
+    required: false
+    default: '10m'
+  parallelism:
+    description: 'Terraform parallelism'
+    required: false
+    default: '10'
+  backup_state:
+    description: 'Backup state before apply'
+    required: false
+    default: 'true'
+
+outputs:
+  applied:
+    description: 'Whether apply was successful'
+    value: ${{ steps.apply.outputs.applied }}
 
 runs:
   using: 'composite'
   steps:
+    - name: Validate Authentication
+      shell: bash
+      run: |
+        if [ "${{ inputs.use_oidc }}" == "true" ]; then
+          if [ -z "${{ inputs.azure_client_id }}" ] || [ -z "${{ inputs.azure_tenant_id }}" ] || [ -z "${{ inputs.azure_subscription_id }}" ]; then
+            echo "::error::OIDC authentication requires azure_client_id, azure_tenant_id, and azure_subscription_id"
+            exit 1
+          fi
+          echo "✅ Using OIDC authentication" >> $GITHUB_STEP_SUMMARY
+        else
+          if [ -z "${{ inputs.azure_credentials }}" ]; then
+            echo "::error::Legacy authentication requires azure_credentials JSON"
+            exit 1
+          fi
+          echo "⚠️ Using legacy credentials (consider migrating to OIDC)" >> $GITHUB_STEP_SUMMARY
+        fi
+
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: ${{ inputs.terraform_version }}
         terraform_wrapper: false
 
-    - name: Azure Login
+    - name: Cache Terraform Plugins
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.terraform.d/plugin-cache
+          ${{ inputs.working_directory }}/.terraform
+        key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+        restore-keys: |
+          terraform-${{ runner.os }}-
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true'
       uses: azure/login@v2
       with:
         creds: ${{ inputs.azure_credentials }}
 
-    - name: Set ARM Environment Variables
+    - name: Set ARM Environment Variables (OIDC)
+      if: inputs.use_oidc == 'true'
+      shell: bash
+      run: |
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ inputs.azure_client_id }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ inputs.azure_subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ inputs.azure_tenant_id }}" >> $GITHUB_ENV
+
+    - name: Set ARM Environment Variables (Legacy)
+      if: inputs.use_oidc != 'true'
       shell: bash
       run: |
         echo "ARM_CLIENT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientId')" >> $GITHUB_ENV
         echo "ARM_CLIENT_SECRET=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
         echo "ARM_SUBSCRIPTION_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.subscriptionId')" >> $GITHUB_ENV
         echo "ARM_TENANT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+
+    - name: Configure Plugin Cache
+      shell: bash
+      run: |
+        mkdir -p ~/.terraform.d/plugin-cache
+        echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+    - name: Backup State Before Apply
+      if: inputs.backup_state == 'true'
+      shell: bash
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        BACKUP_NAME="${{ inputs.state_key }}.backup-${TIMESTAMP}"
+        
+        # Create backup container if missing
+        az storage container create \
+          --account-name ${{ inputs.backend_storage_account }} \
+          --name ${{ inputs.backend_container }}-backups \
+          --auth-mode login \
+          2>/dev/null || true
+        
+        # Copy current state to backup
+        az storage blob copy start \
+          --account-name ${{ inputs.backend_storage_account }} \
+          --destination-container ${{ inputs.backend_container }}-backups \
+          --destination-blob "$BACKUP_NAME" \
+          --source-account-name ${{ inputs.backend_storage_account }} \
+          --source-container ${{ inputs.backend_container }} \
+          --source-blob ${{ inputs.state_key }} \
+          --auth-mode login \
+          2>/dev/null || echo "No existing state to backup"
+        
+        echo "💾 State backed up to: $BACKUP_NAME" >> $GITHUB_STEP_SUMMARY
 
     - name: Terraform Init
       shell: bash
@@ -63,7 +176,8 @@ runs:
           -backend-config="resource_group_name=${{ inputs.backend_resource_group }}" \
           -backend-config="storage_account_name=${{ inputs.backend_storage_account }}" \
           -backend-config="container_name=${{ inputs.backend_container }}" \
-          -backend-config="key=${{ inputs.state_key }}"
+          -backend-config="key=${{ inputs.state_key }}" \
+          -lock-timeout=${{ inputs.lock_timeout }}
 
     - name: Download Plan
       uses: actions/download-artifact@v4
@@ -71,13 +185,52 @@ runs:
         name: ${{ inputs.plan_artifact }}
         path: ${{ inputs.working_directory }}
 
-    - name: Terraform Apply
+    - name: Verify Plan Exists
       shell: bash
       working-directory: ${{ inputs.working_directory }}
-      run: terraform apply -auto-approve tfplan
+      run: |
+        if [ ! -f "tfplan" ]; then
+          echo "::error::Plan file not found. Did the plan job complete successfully?"
+          exit 1
+        fi
+        echo "✅ Plan file verified" >> $GITHUB_STEP_SUMMARY
+
+    - name: Terraform Apply
+      id: apply
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set +e
+        terraform apply \
+          -auto-approve \
+          -parallelism=${{ inputs.parallelism }} \
+          -lock-timeout=${{ inputs.lock_timeout }} \
+          tfplan 2>&1 | tee apply_output.txt
+        EXITCODE=$?
+        if [ $EXITCODE -eq 0 ]; then
+          echo "applied=true" >> $GITHUB_OUTPUT
+        else
+          echo "applied=false" >> $GITHUB_OUTPUT
+          echo "::error::Terraform apply failed"
+          exit 1
+        fi
 
     - name: Summary
       shell: bash
       run: |
         echo "## ✅ Applied - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-        echo "Deployed by @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 👤 Deployed by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🕐 Time | $(date -u +"%Y-%m-%d %H:%M:%S UTC") |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔗 Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🌍 Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+
+    - name: Upload Apply Output
+      uses: actions/upload-artifact@v4
+      with:
+        name: apply-output-${{ inputs.environment }}-${{ github.sha }}
+        path: ${{ inputs.working_directory }}/apply_output.txt
+        retention-days: 30
+        overwrite: true

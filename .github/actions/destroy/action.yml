@@ -1,5 +1,5 @@
 name: 'Terraform Destroy'
-description: 'Destroy Terraform infrastructure'
+description: 'Destroy Terraform infrastructure with OIDC or legacy auth support'
 
 inputs:
   terraform_version:
@@ -10,9 +10,25 @@ inputs:
     description: 'Working directory'
     required: false
     default: '.'
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication (recommended)'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication (Backward Compatible)
   azure_credentials:
-    description: 'Azure credentials JSON'
-    required: true
+    description: 'Azure credentials JSON (legacy - use OIDC instead)'
+    required: false
+  # Backend Configuration
   backend_resource_group:
     description: 'Backend resource group'
     required: true
@@ -35,6 +51,27 @@ inputs:
   confirm:
     description: 'Must be DESTROY to confirm'
     required: true
+  # Advanced Options
+  lock_timeout:
+    description: 'State lock timeout'
+    required: false
+    default: '10m'
+  target:
+    description: 'Target specific resources (comma-separated)'
+    required: false
+    default: ''
+  backup_state:
+    description: 'Backup state before destroy'
+    required: false
+    default: 'true'
+
+outputs:
+  destroyed:
+    description: 'Whether destroy was successful'
+    value: ${{ steps.destroy.outputs.destroyed }}
+  resources_destroyed:
+    description: 'Number of resources destroyed'
+    value: ${{ steps.count.outputs.count }}
 
 runs:
   using: 'composite'
@@ -44,10 +81,30 @@ runs:
       run: |
         if [ "${{ inputs.confirm }}" != "DESTROY" ]; then
           echo "## ❌ Destruction NOT Confirmed" >> $GITHUB_STEP_SUMMARY
-          echo "Type **DESTROY** to confirm." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To destroy infrastructure, you must type **DESTROY** in the confirmation field." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ This is a safety measure to prevent accidental destruction." >> $GITHUB_STEP_SUMMARY
           exit 1
         fi
         echo "## ⚠️ Destruction Confirmed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔴 **WARNING**: Infrastructure will be permanently destroyed!" >> $GITHUB_STEP_SUMMARY
+
+    - name: Validate Authentication
+      shell: bash
+      run: |
+        if [ "${{ inputs.use_oidc }}" == "true" ]; then
+          if [ -z "${{ inputs.azure_client_id }}" ] || [ -z "${{ inputs.azure_tenant_id }}" ] || [ -z "${{ inputs.azure_subscription_id }}" ]; then
+            echo "::error::OIDC authentication requires azure_client_id, azure_tenant_id, and azure_subscription_id"
+            exit 1
+          fi
+        else
+          if [ -z "${{ inputs.azure_credentials }}" ]; then
+            echo "::error::Legacy authentication requires azure_credentials JSON"
+            exit 1
+          fi
+        fi
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
@@ -55,18 +112,80 @@ runs:
         terraform_version: ${{ inputs.terraform_version }}
         terraform_wrapper: false
 
-    - name: Azure Login
+    - name: Cache Terraform Plugins
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.terraform.d/plugin-cache
+          ${{ inputs.working_directory }}/.terraform
+        key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+        restore-keys: |
+          terraform-${{ runner.os }}-
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true'
       uses: azure/login@v2
       with:
         creds: ${{ inputs.azure_credentials }}
 
-    - name: Set ARM Environment Variables
+    - name: Set ARM Environment Variables (OIDC)
+      if: inputs.use_oidc == 'true'
+      shell: bash
+      run: |
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ inputs.azure_client_id }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ inputs.azure_subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ inputs.azure_tenant_id }}" >> $GITHUB_ENV
+
+    - name: Set ARM Environment Variables (Legacy)
+      if: inputs.use_oidc != 'true'
       shell: bash
       run: |
         echo "ARM_CLIENT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientId')" >> $GITHUB_ENV
         echo "ARM_CLIENT_SECRET=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
         echo "ARM_SUBSCRIPTION_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.subscriptionId')" >> $GITHUB_ENV
         echo "ARM_TENANT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+
+    - name: Configure Plugin Cache
+      shell: bash
+      run: |
+        mkdir -p ~/.terraform.d/plugin-cache
+        echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+    - name: Backup State Before Destroy
+      if: inputs.backup_state == 'true'
+      shell: bash
+      run: |
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        BACKUP_NAME="${{ inputs.state_key }}.pre-destroy-${TIMESTAMP}"
+        
+        # Create backup container if missing
+        az storage container create \
+          --account-name ${{ inputs.backend_storage_account }} \
+          --name ${{ inputs.backend_container }}-backups \
+          --auth-mode login \
+          2>/dev/null || true
+        
+        # Copy current state to backup
+        az storage blob copy start \
+          --account-name ${{ inputs.backend_storage_account }} \
+          --destination-container ${{ inputs.backend_container }}-backups \
+          --destination-blob "$BACKUP_NAME" \
+          --source-account-name ${{ inputs.backend_storage_account }} \
+          --source-container ${{ inputs.backend_container }} \
+          --source-blob ${{ inputs.state_key }} \
+          --auth-mode login \
+          2>/dev/null || echo "No existing state to backup"
+        
+        echo "💾 State backed up to: $BACKUP_NAME" >> $GITHUB_STEP_SUMMARY
 
     - name: Terraform Init
       shell: bash
@@ -76,15 +195,72 @@ runs:
           -backend-config="resource_group_name=${{ inputs.backend_resource_group }}" \
           -backend-config="storage_account_name=${{ inputs.backend_storage_account }}" \
           -backend-config="container_name=${{ inputs.backend_container }}" \
-          -backend-config="key=${{ inputs.state_key }}"
+          -backend-config="key=${{ inputs.state_key }}" \
+          -lock-timeout=${{ inputs.lock_timeout }}
 
-    - name: Terraform Destroy
+    - name: Count Resources
+      id: count
       shell: bash
       working-directory: ${{ inputs.working_directory }}
-      run: terraform destroy -var-file="${{ inputs.var_file }}" -auto-approve
+      run: |
+        COUNT=$(terraform state list 2>/dev/null | wc -l || echo "0")
+        echo "count=$COUNT" >> $GITHUB_OUTPUT
+        echo "📊 Resources to destroy: **$COUNT**" >> $GITHUB_STEP_SUMMARY
+
+    - name: Build Target Arguments
+      id: targets
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.target }}" ]; then
+          TARGETS=""
+          IFS=',' read -ra ADDR <<< "${{ inputs.target }}"
+          for target in "${ADDR[@]}"; do
+            TARGETS="$TARGETS -target=$target"
+          done
+          echo "args=$TARGETS" >> $GITHUB_OUTPUT
+          echo "🎯 Targeted destroy: ${{ inputs.target }}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "args=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Terraform Destroy
+      id: destroy
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set +e
+        terraform destroy \
+          -var-file="${{ inputs.var_file }}" \
+          -auto-approve \
+          -lock-timeout=${{ inputs.lock_timeout }} \
+          ${{ steps.targets.outputs.args }} \
+          2>&1 | tee destroy_output.txt
+        EXITCODE=$?
+        if [ $EXITCODE -eq 0 ]; then
+          echo "destroyed=true" >> $GITHUB_OUTPUT
+        else
+          echo "destroyed=false" >> $GITHUB_OUTPUT
+          echo "::error::Terraform destroy failed"
+          exit 1
+        fi
 
     - name: Summary
       shell: bash
       run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
         echo "## 💥 Destroyed - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-        echo "Destroyed by @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 👤 Destroyed by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🕐 Time | $(date -u +"%Y-%m-%d %H:%M:%S UTC") |" >> $GITHUB_STEP_SUMMARY
+        echo "| 📊 Resources | ${{ steps.count.outputs.count }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🌍 Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+
+    - name: Upload Destroy Output
+      uses: actions/upload-artifact@v4
+      with:
+        name: destroy-output-${{ inputs.environment }}-${{ github.sha }}
+        path: ${{ inputs.working_directory }}/destroy_output.txt
+        retention-days: 90
+        overwrite: true

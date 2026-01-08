@@ -1,5 +1,5 @@
 name: 'Terraform Plan'
-description: 'Initialize and plan Terraform changes'
+description: 'Initialize and plan Terraform changes with OIDC or legacy auth support'
 
 inputs:
   terraform_version:
@@ -10,9 +10,25 @@ inputs:
     description: 'Working directory'
     required: false
     default: '.'
+  # OIDC Authentication (Recommended)
+  use_oidc:
+    description: 'Use OIDC authentication (recommended)'
+    required: false
+    default: 'false'
+  azure_client_id:
+    description: 'Azure Client ID (for OIDC)'
+    required: false
+  azure_tenant_id:
+    description: 'Azure Tenant ID (for OIDC)'
+    required: false
+  azure_subscription_id:
+    description: 'Azure Subscription ID (for OIDC)'
+    required: false
+  # Legacy Authentication (Backward Compatible)
   azure_credentials:
-    description: 'Azure credentials JSON'
-    required: true
+    description: 'Azure credentials JSON (legacy - use OIDC instead)'
+    required: false
+  # Backend Configuration
   backend_resource_group:
     description: 'Backend resource group'
     required: true
@@ -32,6 +48,15 @@ inputs:
   environment:
     description: 'Environment name'
     required: true
+  # Advanced Options
+  lock_timeout:
+    description: 'State lock timeout'
+    required: false
+    default: '5m'
+  parallelism:
+    description: 'Terraform parallelism'
+    required: false
+    default: '10'
 
 outputs:
   has_changes:
@@ -46,28 +71,83 @@ outputs:
   destroy:
     description: 'Resources to destroy'
     value: ${{ steps.summary.outputs.destroy }}
+  plan_json:
+    description: 'Plan output in JSON format'
+    value: ${{ steps.json.outputs.plan_json }}
 
 runs:
   using: 'composite'
   steps:
+    - name: Validate Authentication
+      shell: bash
+      run: |
+        if [ "${{ inputs.use_oidc }}" == "true" ]; then
+          if [ -z "${{ inputs.azure_client_id }}" ] || [ -z "${{ inputs.azure_tenant_id }}" ] || [ -z "${{ inputs.azure_subscription_id }}" ]; then
+            echo "::error::OIDC authentication requires azure_client_id, azure_tenant_id, and azure_subscription_id"
+            exit 1
+          fi
+          echo "✅ Using OIDC authentication" >> $GITHUB_STEP_SUMMARY
+        else
+          if [ -z "${{ inputs.azure_credentials }}" ]; then
+            echo "::error::Legacy authentication requires azure_credentials JSON"
+            exit 1
+          fi
+          echo "⚠️ Using legacy credentials (consider migrating to OIDC)" >> $GITHUB_STEP_SUMMARY
+        fi
+
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: ${{ inputs.terraform_version }}
         terraform_wrapper: false
 
-    - name: Azure Login
+    - name: Cache Terraform Plugins
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.terraform.d/plugin-cache
+          ${{ inputs.working_directory }}/.terraform
+        key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+        restore-keys: |
+          terraform-${{ runner.os }}-
+
+    - name: Azure Login (OIDC)
+      if: inputs.use_oidc == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+
+    - name: Azure Login (Legacy)
+      if: inputs.use_oidc != 'true'
       uses: azure/login@v2
       with:
         creds: ${{ inputs.azure_credentials }}
 
-    - name: Set ARM Environment Variables
+    - name: Set ARM Environment Variables (OIDC)
+      if: inputs.use_oidc == 'true'
+      shell: bash
+      run: |
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ inputs.azure_client_id }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ inputs.azure_subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ inputs.azure_tenant_id }}" >> $GITHUB_ENV
+
+    - name: Set ARM Environment Variables (Legacy)
+      if: inputs.use_oidc != 'true'
       shell: bash
       run: |
         echo "ARM_CLIENT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientId')" >> $GITHUB_ENV
         echo "ARM_CLIENT_SECRET=$(echo '${{ inputs.azure_credentials }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
         echo "ARM_SUBSCRIPTION_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.subscriptionId')" >> $GITHUB_ENV
         echo "ARM_TENANT_ID=$(echo '${{ inputs.azure_credentials }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+
+    - name: Configure Plugin Cache
+      shell: bash
+      run: |
+        mkdir -p ~/.terraform.d/plugin-cache
+        echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
 
     - name: Terraform Init
       shell: bash
@@ -77,7 +157,8 @@ runs:
           -backend-config="resource_group_name=${{ inputs.backend_resource_group }}" \
           -backend-config="storage_account_name=${{ inputs.backend_storage_account }}" \
           -backend-config="container_name=${{ inputs.backend_container }}" \
-          -backend-config="key=${{ inputs.state_key }}"
+          -backend-config="key=${{ inputs.state_key }}" \
+          -lock-timeout=${{ inputs.lock_timeout }}
 
     - name: Terraform Plan
       id: plan
@@ -90,6 +171,8 @@ runs:
           -var-file="${{ inputs.var_file }}" \
           -out=tfplan \
           -detailed-exitcode \
+          -parallelism=${{ inputs.parallelism }} \
+          -lock-timeout=${{ inputs.lock_timeout }} \
           -no-color 2>&1 | tee plan_output.txt
         EXITCODE=${PIPESTATUS[0]}
         if [ $EXITCODE -eq 0 ]; then
@@ -97,8 +180,17 @@ runs:
         elif [ $EXITCODE -eq 2 ]; then
           echo "has_changes=true" >> $GITHUB_OUTPUT
         else
+          echo "::error::Terraform plan failed"
           exit 1
         fi
+
+    - name: Generate Plan JSON
+      id: json
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        terraform show -json tfplan > tfplan.json
+        echo "plan_json=$(cat tfplan.json | jq -c '.')" >> $GITHUB_OUTPUT
 
     - name: Parse Summary
       id: summary
@@ -114,13 +206,20 @@ runs:
         
         echo "## 📋 Plan - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
         if [ "${{ steps.plan.outputs.has_changes }}" == "false" ]; then
-          echo "✅ No changes" >> $GITHUB_STEP_SUMMARY
+          echo "✅ No changes - infrastructure is up to date" >> $GITHUB_STEP_SUMMARY
         else
           echo "| Action | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| ➕ Add | $ADD |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔄 Change | $CHANGE |" >> $GITHUB_STEP_SUMMARY
           echo "| ➖ Destroy | $DESTROY |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>📄 Plan Output</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -100 plan_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
         fi
 
     - name: Upload Plan
@@ -129,5 +228,7 @@ runs:
         name: tfplan-${{ inputs.environment }}-${{ github.sha }}
         path: |
           ${{ inputs.working_directory }}/tfplan
+          ${{ inputs.working_directory }}/tfplan.json
           ${{ inputs.working_directory }}/plan_output.txt
         retention-days: 5
+        overwrite: true
