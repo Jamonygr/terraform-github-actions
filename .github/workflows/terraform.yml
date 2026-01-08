@@ -1,27 +1,51 @@
 # =============================================================================
-# TERRAFORM PIPELINE - Azure Landing Zone (Extended)
+# TERRAFORM UNIFIED PIPELINE - Azure Landing Zone
 # =============================================================================
-# Full-featured pipeline with security, cost estimation, testing, and more
-# Can be used directly or called from other repositories via workflow_call
+# Single pipeline for ALL Terraform operations:
+# - Push/PR: Format, validate, security scan, plan
+# - Manual: Plan, apply, destroy (single environment)
+# - Matrix: Multi-environment parallel deployments
+# - Drift: Scheduled drift detection (daily at 6 AM UTC)
 # =============================================================================
 
 name: 'Terraform Pipeline'
 
 on:
+  # Code changes trigger validation and planning
   push:
     branches: [main]
     paths: ['**.tf', '**.tfvars', 'modules/**', 'landing-zones/**', 'environments/**']
   pull_request:
     branches: [main]
     paths: ['**.tf', '**.tfvars']
+  
+  # Scheduled drift detection (daily at 6 AM UTC)
+  schedule:
+    - cron: '0 6 * * *'
+  
+  # Manual trigger for all operations
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'Environment'
+      mode:
+        description: 'Pipeline Mode'
         required: true
+        default: 'single'
+        type: choice
+        options:
+          - single      # Single environment deployment
+          - matrix      # Multi-environment parallel deployment
+          - drift       # Drift detection only
+      environment:
+        description: 'Environment (single mode)'
+        required: false
         default: 'lab'
         type: choice
-        options: [dev, lab, prod]
+        options: [dev, lab, staging, prod]
+      environments:
+        description: 'Environments (matrix mode, comma-separated)'
+        required: false
+        default: 'dev,staging,prod'
+        type: string
       action:
         description: 'Action'
         required: true
@@ -32,6 +56,17 @@ on:
         description: 'Type DESTROY to confirm'
         required: false
         type: string
+      working_directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      create_drift_issue:
+        description: 'Create issue on drift (drift mode)'
+        required: false
+        default: true
+        type: boolean
+  
   # Reusable workflow support
   workflow_call:
     inputs:
@@ -69,7 +104,7 @@ on:
         required: false
 
 concurrency:
-  group: terraform-${{ github.ref }}-${{ github.event.inputs.environment || 'lab' }}
+  group: terraform-${{ github.ref }}-${{ inputs.environment || github.event.inputs.environment || github.event.inputs.mode || 'default' }}
   cancel-in-progress: false
 
 permissions:
@@ -77,10 +112,14 @@ permissions:
   pull-requests: write
   security-events: write
   id-token: write
+  issues: write
 
 env:
-  TF_VERSION: '1.9.0'
-  ENVIRONMENT: ${{ github.event.inputs.environment || 'lab' }}
+  TF_VERSION: ${{ inputs.terraform_version || vars.TF_VERSION || '1.9.0' }}
+  ENVIRONMENT: ${{ inputs.environment || github.event.inputs.environment || 'lab' }}
+  WORKING_DIRECTORY: ${{ inputs.working_directory || github.event.inputs.working_directory || vars.TF_WORKING_DIRECTORY || '.' }}
+  # Pipeline Mode Detection
+  PIPELINE_MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}
   # OIDC Configuration (set USE_OIDC=true in repo variables to enable)
   USE_OIDC: ${{ vars.USE_OIDC || 'false' }}
   AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -99,12 +138,51 @@ env:
 
 jobs:
   # =========================================================================
-  # STAGE 1: FORMAT CHECK
+  # STAGE 0: MODE ROUTER - Determines which jobs to run
+  # =========================================================================
+  router:
+    name: '🔀 Route Pipeline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.detect.outputs.mode }}
+      is_drift: ${{ steps.detect.outputs.is_drift }}
+      is_matrix: ${{ steps.detect.outputs.is_matrix }}
+      is_single: ${{ steps.detect.outputs.is_single }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Detect Pipeline Mode
+        id: detect
+        run: |
+          MODE="${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}"
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+          echo "is_drift=$([[ '$MODE' == 'drift' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "is_matrix=$([[ '$MODE' == 'matrix' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "is_single=$([[ '$MODE' == 'single' || '${{ github.event_name }}' == 'push' || '${{ github.event_name }}' == 'pull_request' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          
+          echo "## 🔀 Pipeline Mode: $MODE" >> $GITHUB_STEP_SUMMARY
+          echo "- Event: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trigger: ${{ github.event_name == 'schedule' && 'Scheduled' || 'Manual/Push/PR' }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Setup Matrix
+        id: matrix
+        if: github.event.inputs.mode == 'matrix'
+        run: |
+          ENVS="${{ github.event.inputs.environments || 'dev,staging,prod' }}"
+          JSON_ARRAY=$(echo "$ENVS" | tr ',' '\n' | jq -R . | jq -s .)
+          echo "matrix={\"environment\":$JSON_ARRAY}" >> $GITHUB_OUTPUT
+          echo "### Matrix Environments:" >> $GITHUB_STEP_SUMMARY
+          echo "$ENVS" | tr ',' '\n' | while read env; do echo "- $env"; done >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
+  # STAGE 1: FORMAT CHECK (Skip for drift mode)
   # =========================================================================
   format:
     name: '1️⃣ Format Check'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: router
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,6 +193,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Format Check
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: |
           if ! terraform fmt -check -recursive -diff; then
             echo "## ❌ Format Check Failed" >> $GITHUB_STEP_SUMMARY
@@ -124,13 +203,14 @@ jobs:
           echo "## ✅ Format Check Passed" >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
-  # STAGE 2: VALIDATE
+  # STAGE 2: VALIDATE (Skip for drift mode)
   # =========================================================================
   validate:
     name: '2️⃣ Validate'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: format
+    needs: [router, format]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,19 +221,21 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Validate
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: |
           terraform init -backend=false
           terraform validate
           echo "## ✅ Validation Passed" >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
-  # STAGE 3: SECURITY - TFSEC
+  # STAGE 3: SECURITY - TFSEC (Skip for drift mode)
   # =========================================================================
   security-tfsec:
     name: '3️⃣ Security - tfsec'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -161,6 +243,7 @@ jobs:
 
       - uses: aquasecurity/tfsec-action@v1.0.3
         with:
+          working_directory: ${{ env.WORKING_DIRECTORY }}
           soft_fail: true
           format: sarif
           additional_args: --out tfsec-results.sarif
@@ -185,13 +268,14 @@ jobs:
       - run: echo "## 🔒 tfsec scan completed" >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
-  # STAGE 3: SECURITY - CHECKOV
+  # STAGE 3: SECURITY - CHECKOV (Skip for drift mode)
   # =========================================================================
   security-checkov:
     name: '3️⃣ Security - Checkov'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,7 +283,7 @@ jobs:
 
       - uses: bridgecrewio/checkov-action@v12
         with:
-          directory: .
+          directory: ${{ env.WORKING_DIRECTORY }}
           framework: terraform
           soft_fail: true
           output_format: cli,sarif
@@ -215,13 +299,14 @@ jobs:
       - run: echo "## 🛡️ Checkov scan completed" >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
-  # STAGE 3: SECRET SCANNING (NEW)
+  # STAGE 3: SECRET SCANNING (Skip for drift mode)
   # =========================================================================
   secret-scan:
     name: '3️⃣ Security - Secrets'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -230,13 +315,14 @@ jobs:
       - uses: ./.github/actions/secret-scan
 
   # =========================================================================
-  # STAGE 3: SHELLCHECK - Script Security
+  # STAGE 3: SHELLCHECK - Script Security (Skip for drift mode)
   # =========================================================================
   shellcheck:
     name: '3️⃣ Security - Scripts'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -279,13 +365,14 @@ jobs:
         continue-on-error: true
 
   # =========================================================================
-  # STAGE 4: TFLINT
+  # STAGE 4: TFLINT (Skip for drift mode)
   # =========================================================================
   tflint:
     name: '4️⃣ Lint - TFLint'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -294,6 +381,7 @@ jobs:
       - uses: terraform-linters/setup-tflint@v4
 
       - name: Run TFLint
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: |
           cat > .tflint.hcl << 'EOF'
           plugin "azurerm" {
@@ -308,13 +396,14 @@ jobs:
         continue-on-error: true
 
   # =========================================================================
-  # STAGE 4: POLICY CHECK (NEW)
+  # STAGE 4: POLICY CHECK (Skip for drift mode)
   # =========================================================================
   policy-check:
     name: '4️⃣ Lint - Policy'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -325,21 +414,24 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Init for Policy Check
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: terraform init -backend=false
 
       - uses: ./.github/actions/policy-check
         with:
           policy_dir: policies
           soft_fail: 'true'
+          working_directory: ${{ env.WORKING_DIRECTORY }}
 
   # =========================================================================
-  # STAGE 4: TERRAFORM DOCS (NEW)
+  # STAGE 4: TERRAFORM DOCS (Skip for drift mode)
   # =========================================================================
   terraform-docs:
     name: '4️⃣ Lint - Docs'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: validate
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -348,15 +440,17 @@ jobs:
       - uses: ./.github/actions/terraform-docs
         with:
           recursive: 'true'
+          working_directory: ${{ env.WORKING_DIRECTORY }}
 
   # =========================================================================
-  # STAGE 5: GRAPH VISUALIZATION (NEW)
+  # STAGE 5: GRAPH VISUALIZATION (Skip for drift mode)
   # =========================================================================
   graph:
     name: '5️⃣ Analysis - Graph'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
+    needs: [router, security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -369,15 +463,17 @@ jobs:
       - uses: ./.github/actions/graph
         with:
           output_format: svg
+          working_directory: ${{ env.WORKING_DIRECTORY }}
 
   # =========================================================================
-  # STAGE 5: MODULE VERSION CHECK (NEW)
+  # STAGE 5: MODULE VERSION CHECK (Skip for drift mode)
   # =========================================================================
   module-versions:
     name: '5️⃣ Analysis - Versions'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
+    needs: [router, security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -388,18 +484,22 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Init
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: terraform init -backend=false
 
       - uses: ./.github/actions/module-version
+        with:
+          working_directory: ${{ env.WORKING_DIRECTORY }}
 
   # =========================================================================
-  # STAGE 6: COST ESTIMATION (NEW)
+  # STAGE 6: COST ESTIMATION (Skip for drift mode)
   # =========================================================================
   cost-estimate:
     name: '6️⃣ Analysis - Cost'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [graph, module-versions]
+    needs: [router, graph, module-versions]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -410,11 +510,13 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Init
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: terraform init -backend=false
 
       - uses: ./.github/actions/cost-estimate
         with:
           api_key: ${{ secrets.INFRACOST_API_KEY }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
           var_file: environments/${{ env.ENVIRONMENT }}.tfvars
           cost_threshold: ${{ vars.COST_THRESHOLD || '500' }}
           cost_increase_threshold: ${{ vars.COST_INCREASE_THRESHOLD || '100' }}
@@ -422,13 +524,14 @@ jobs:
         continue-on-error: true
 
   # =========================================================================
-  # STAGE 6B: VERSION CHECK
+  # STAGE 6B: VERSION CHECK (Skip for drift mode)
   # =========================================================================
   version-check:
     name: '6️⃣ Analysis - Versions'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [graph, module-versions]
+    needs: [router, graph, module-versions]
+    if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -437,17 +540,19 @@ jobs:
       - uses: ./.github/actions/version-check
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
           check_cves: 'true'
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   # =========================================================================
-  # STAGE 7: PLAN
+  # STAGE 7: PLAN (Skip for drift mode - uses drift-detect instead)
   # =========================================================================
   plan:
     name: '7️⃣ Plan'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [graph, module-versions]
+    needs: [router, graph, module-versions]
+    if: needs.router.outputs.is_drift != 'true'
     outputs:
       has_changes: ${{ steps.plan.outputs.has_changes }}
       add: ${{ steps.plan.outputs.add }}
@@ -463,6 +568,7 @@ jobs:
         uses: ./.github/actions/plan
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
           # OIDC Authentication (recommended)
           use_oidc: ${{ env.USE_OIDC }}
           azure_client_id: ${{ env.AZURE_CLIENT_ID }}
@@ -502,7 +608,7 @@ jobs:
           plan_add: ${{ steps.plan.outputs.add }}
           plan_change: ${{ steps.plan.outputs.change }}
           plan_destroy: ${{ steps.plan.outputs.destroy }}
-          plan_file: plan_output.txt
+          plan_file: ${{ env.WORKING_DIRECTORY }}/plan_output.txt
           collapse_plan: 'true'
 
   # =========================================================================
@@ -533,19 +639,21 @@ jobs:
         continue-on-error: true
 
   # =========================================================================
-  # STAGE 8: APPLY
+  # STAGE 8: APPLY (Single environment mode only)
   # =========================================================================
   apply:
     name: '8️⃣ Apply'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [plan, cost-estimate]
+    needs: [router, plan, cost-estimate]
     if: |
       always() &&
       needs.plan.result == 'success' &&
+      needs.router.outputs.mode != 'drift' &&
+      needs.router.outputs.mode != 'matrix' &&
       github.event_name == 'workflow_dispatch' && 
       github.event.inputs.action == 'apply'
-    environment: ${{ github.event.inputs.environment }}
+    environment: ${{ inputs.environment || github.event.inputs.environment || 'lab' }}
     outputs:
       start_time: ${{ steps.timer.outputs.start }}
       apply_result: ${{ steps.apply.outcome }}
@@ -597,6 +705,7 @@ jobs:
         uses: ./.github/actions/apply
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
           use_oidc: ${{ env.USE_OIDC }}
           azure_client_id: ${{ env.AZURE_CLIENT_ID }}
           azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
@@ -613,6 +722,7 @@ jobs:
       - name: Post-Apply Smoke Test
         id: smoke-test
         if: success()
+        working-directory: ${{ env.WORKING_DIRECTORY }}
         run: |
           echo "## 🔥 Post-Apply Smoke Test" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -671,12 +781,14 @@ jobs:
         with:
           environment: ${{ env.ENVIRONMENT }}
           format: json
+          working_directory: ${{ env.WORKING_DIRECTORY }}
 
       - name: Change Log
         if: success()
         uses: ./.github/actions/changelog
         with:
           environment: ${{ env.ENVIRONMENT }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
 
       - name: Create Audit Log Entry
         if: always()
@@ -728,7 +840,7 @@ jobs:
         uses: ./.github/actions/notification
         with:
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
-          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
           status: 'success'
           environment: ${{ env.ENVIRONMENT }}
           message: 'Terraform apply completed successfully'
@@ -740,7 +852,7 @@ jobs:
         uses: ./.github/actions/notification
         with:
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
-          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
           status: 'failure'
           environment: ${{ env.ENVIRONMENT }}
           message: 'Terraform apply failed - check workflow logs'
@@ -748,13 +860,13 @@ jobs:
         continue-on-error: true
 
   # =========================================================================
-  # STAGE 10: METRICS
+  # STAGE 10: METRICS (After single-env apply)
   # =========================================================================
   metrics:
     name: '🔟 Metrics'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [apply, plan]
+    needs: [router, apply, plan]
     if: always() && needs.apply.result == 'success'
     steps:
       - uses: actions/checkout@v4
@@ -764,7 +876,7 @@ jobs:
       - uses: ./.github/actions/metrics
         with:
           environment: ${{ env.ENVIRONMENT }}
-          action: ${{ github.event.inputs.action || 'plan' }}
+          action: ${{ inputs.action || github.event.inputs.action || 'plan' }}
           start_time: ${{ needs.apply.outputs.start_time || github.run_id }}
           status: ${{ needs.apply.result }}
           add_count: ${{ needs.plan.outputs.add || '0' }}
@@ -772,18 +884,20 @@ jobs:
           destroy_count: ${{ needs.plan.outputs.destroy || '0' }}
 
   # =========================================================================
-  # STAGE 9: DESTROY (with Approval Gate)
+  # STAGE 9: DESTROY (Single environment mode only, with Approval Gate)
   # =========================================================================
   destroy:
     name: '9️⃣ Destroy'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: plan
+    needs: [router, plan]
     if: |
+      needs.router.outputs.mode != 'drift' &&
+      needs.router.outputs.mode != 'matrix' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.action == 'destroy' &&
       github.event.inputs.destroy_confirm == 'DESTROY'
-    environment: ${{ github.event.inputs.environment }}-destroy
+    environment: ${{ format('{0}-destroy', inputs.environment || github.event.inputs.environment || 'lab') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -824,6 +938,7 @@ jobs:
         uses: ./.github/actions/destroy
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
           use_oidc: ${{ env.USE_OIDC }}
           azure_client_id: ${{ env.AZURE_CLIENT_ID }}
           azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
@@ -842,9 +957,303 @@ jobs:
         uses: ./.github/actions/notification
         with:
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
-          webhook_type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
           status: 'warning'
           environment: ${{ env.ENVIRONMENT }}
           message: 'Infrastructure has been destroyed'
           title: '🟡 Environment Destroyed'
+        continue-on-error: true
+
+  # ===========================================================================
+  # ==================== DRIFT DETECTION MODE =================================
+  # ===========================================================================
+  
+  # =========================================================================
+  # DRIFT: Detection Matrix (scheduled or manual drift mode)
+  # =========================================================================
+  drift-detect:
+    name: '🔍 Drift - ${{ matrix.environment }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: router
+    if: needs.router.outputs.is_drift == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Drift Detection
+        uses: ./.github/actions/drift-detect
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          # OIDC Authentication (Recommended)
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          # Legacy Authentication (Fallback)
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          # Backend
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: '${{ matrix.environment }}.terraform.tfstate'
+          var_file: 'environments/${{ matrix.environment }}.tfvars'
+          environment: ${{ matrix.environment }}
+          # Alerting
+          create_issue: ${{ github.event.inputs.create_drift_issue || 'true' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_drift: false
+
+  # =========================================================================
+  # DRIFT: Notification Summary
+  # =========================================================================
+  drift-notify:
+    name: '📢 Drift Summary'
+    runs-on: ubuntu-latest
+    needs: [router, drift-detect]
+    if: always() && needs.router.outputs.is_drift == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check Results
+        id: check
+        run: |
+          if [ "${{ needs.drift-detect.result }}" == "failure" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=Drift detection failed or drift was detected" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=All environments are in sync with Terraform configuration" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Notification
+        if: vars.SLACK_WEBHOOK_URL != '' || vars.TEAMS_WEBHOOK_URL != ''
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          title: 'Drift Detection Complete'
+          message: ${{ steps.check.outputs.message }}
+          status: ${{ steps.check.outputs.status }}
+          environment: 'all'
+        continue-on-error: true
+
+      - name: Summary
+        run: |
+          echo "## 🔍 Drift Detection Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Overall | ${{ needs.drift-detect.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered: ${{ github.event_name == 'schedule' && 'Scheduled (daily 6 AM UTC)' || 'Manual' }}" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # ==================== MATRIX DEPLOYMENT MODE ===============================
+  # ===========================================================================
+
+  # =========================================================================
+  # MATRIX: Plan for each environment
+  # =========================================================================
+  matrix-plan:
+    name: '📋 Matrix Plan - ${{ matrix.environment }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [router, security-tfsec, security-checkov]
+    if: needs.router.outputs.is_matrix == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.router.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Plan
+        id: plan
+        uses: ./.github/actions/plan
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ matrix.environment }}.terraform.tfstate
+          var_file: environments/${{ matrix.environment }}.tfvars
+          environment: ${{ matrix.environment }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+
+  # =========================================================================
+  # MATRIX: Apply dev first
+  # =========================================================================
+  matrix-apply-dev:
+    name: '🚀 Matrix Apply - dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [router, matrix-plan]
+    if: |
+      needs.router.outputs.is_matrix == 'true' &&
+      github.event.inputs.action == 'apply' && 
+      contains(github.event.inputs.environments, 'dev')
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: dev.terraform.tfstate
+          environment: dev
+          plan_artifact: tfplan-dev-${{ github.sha }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+
+  # =========================================================================
+  # MATRIX: Apply staging after dev
+  # =========================================================================
+  matrix-apply-staging:
+    name: '🚀 Matrix Apply - staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [router, matrix-plan, matrix-apply-dev]
+    if: |
+      always() &&
+      needs.router.outputs.is_matrix == 'true' &&
+      (needs.matrix-apply-dev.result == 'success' || needs.matrix-apply-dev.result == 'skipped') &&
+      github.event.inputs.action == 'apply' && 
+      contains(github.event.inputs.environments, 'staging')
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: staging.terraform.tfstate
+          environment: staging
+          plan_artifact: tfplan-staging-${{ github.sha }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+
+  # =========================================================================
+  # MATRIX: Apply prod after staging
+  # =========================================================================
+  matrix-apply-prod:
+    name: '🚀 Matrix Apply - prod'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [router, matrix-plan, matrix-apply-staging]
+    if: |
+      always() &&
+      needs.router.outputs.is_matrix == 'true' &&
+      (needs.matrix-apply-staging.result == 'success' || needs.matrix-apply-staging.result == 'skipped') &&
+      github.event.inputs.action == 'apply' && 
+      contains(github.event.inputs.environments, 'prod')
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: prod.terraform.tfstate
+          environment: prod
+          plan_artifact: tfplan-prod-${{ github.sha }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+
+  # =========================================================================
+  # MATRIX: Summary Notification
+  # =========================================================================
+  matrix-notify:
+    name: '📢 Matrix Summary'
+    runs-on: ubuntu-latest
+    needs: [router, matrix-apply-dev, matrix-apply-staging, matrix-apply-prod]
+    if: always() && needs.router.outputs.is_matrix == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Deployment Summary
+        run: |
+          echo "## 📊 Multi-Environment Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Check each environment result
+          if [ "${{ needs.matrix-apply-dev.result }}" == "success" ]; then
+            echo "| dev | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.matrix-apply-dev.result }}" == "skipped" ]; then
+            echo "| dev | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| dev | ❌ ${{ needs.matrix-apply-dev.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.matrix-apply-staging.result }}" == "success" ]; then
+            echo "| staging | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.matrix-apply-staging.result }}" == "skipped" ]; then
+            echo "| staging | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| staging | ❌ ${{ needs.matrix-apply-staging.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.matrix-apply-prod.result }}" == "success" ]; then
+            echo "| prod | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.matrix-apply-prod.result }}" == "skipped" ]; then
+            echo "| prod | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| prod | ❌ ${{ needs.matrix-apply-prod.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Send Notification
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          status: ${{ (needs.matrix-apply-dev.result == 'failure' || needs.matrix-apply-staging.result == 'failure' || needs.matrix-apply-prod.result == 'failure') && 'failure' || 'success' }}
+          environment: 'multi-env'
+          message: 'Matrix deployment completed for: ${{ github.event.inputs.environments }}'
+          title: '🎯 Matrix Deploy Complete'
         continue-on-error: true

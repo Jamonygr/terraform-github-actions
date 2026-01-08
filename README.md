@@ -257,6 +257,7 @@ The included workflow (`terraform.yml`) implements a comprehensive 10-stage pipe
 | `environment` | Target environment | `lab` | `dev`, `lab`, `prod` |
 | `action` | Pipeline action | `plan` | `plan`, `apply`, `destroy` |
 | `destroy_confirm` | Destruction confirmation | - | Type `DESTROY` |
+| `working_directory` | Terraform working directory | `.` | Any relative path |
 
 ### Environment Variables
 

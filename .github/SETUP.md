@@ -303,6 +303,7 @@ az role assignment create \
 |--------------|-------------|
 | `SLACK_WEBHOOK_URL` | Slack webhook for notifications |
 | `TEAMS_WEBHOOK_URL` | Microsoft Teams webhook |
+| `TF_WORKING_DIRECTORY` | Default Terraform working directory (e.g., `./test`) |
 
 ---
 
