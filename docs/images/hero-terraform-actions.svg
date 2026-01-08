@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e2a36" />
+      <stop offset="100%" stop-color="#1a6c88" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8bd9f0" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#b6f3ff" stop-opacity="0.05" />
+    </linearGradient>
+    <style>
+      .title { font: 700 42px 'Segoe UI', Arial, sans-serif; fill: #ffffff; }
+      .subtitle { font: 400 18px 'Segoe UI', Arial, sans-serif; fill: #d7eef6; }
+      .subtle { font: 400 14px 'Segoe UI', Arial, sans-serif; fill: #c3dfe8; }
+      .pill { fill: #ffffff; fill-opacity: 0.14; stroke: #ffffff; stroke-opacity: 0.35; rx: 18; }
+      .pill-text { font: 600 12px 'Segoe UI', Arial, sans-serif; fill: #ffffff; letter-spacing: 1px; }
+      .line { stroke: url(#glow); stroke-width: 2; }
+    </style>
+  </defs>
+  <rect x="0" y="0" width="1200" height="360" fill="url(#bg)" />
+
+  <circle cx="1050" cy="60" r="120" fill="#ffffff" fill-opacity="0.06" />
+  <circle cx="1120" cy="250" r="140" fill="#ffffff" fill-opacity="0.05" />
+  <path class="line" d="M 650 70 L 1150 70" />
+  <path class="line" d="M 650 300 L 1120 300" />
+
+  <text class="title" x="60" y="125">Terraform GitHub Actions</text>
+  <text class="subtitle" x="60" y="165">Unified CI/CD pipelines for Azure infrastructure</text>
+  <text class="subtle" x="60" y="195">Plan, secure, apply, and detect drift with confidence</text>
+
+  <rect class="pill" x="700" y="120" width="160" height="36" />
+  <text class="pill-text" x="780" y="143" text-anchor="middle">PLAN</text>
+
+  <rect class="pill" x="880" y="120" width="160" height="36" />
+  <text class="pill-text" x="960" y="143" text-anchor="middle">SECURE</text>
+
+  <rect class="pill" x="700" y="170" width="160" height="36" />
+  <text class="pill-text" x="780" y="193" text-anchor="middle">APPLY</text>
+
+  <rect class="pill" x="880" y="170" width="160" height="36" />
+  <text class="pill-text" x="960" y="193" text-anchor="middle">DRIFT</text>
+</svg>

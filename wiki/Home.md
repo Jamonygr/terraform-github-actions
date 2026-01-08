@@ -1,5 +1,13 @@
 # Terraform GitHub Actions Wiki
 
+<p align="center">
+  <img src="../docs/images/hero-terraform-actions.svg" alt="Terraform GitHub Actions banner" width="1000" />
+</p>
+
+<p align="center">
+  <img src="../docs/images/overview-components.svg" alt="Pipeline components overview" width="1000" />
+</p>
+
 Welcome to the documentation for the Terraform GitHub Actions repository. This wiki explains how the unified pipeline works, how to configure it for your Azure subscription, and how to extend it with optional stages like tests, policy checks, and drift detection.
 
 ## Quick links

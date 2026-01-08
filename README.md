@@ -4,6 +4,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Reusable-2088FF?logo=github-actions)](https://github.com/features/actions)
 
+<p align="center">
+  <img src="docs/images/hero-terraform-actions.svg" alt="Terraform GitHub Actions banner" width="1000" />
+</p>
+
+<p align="center">
+  <img src="docs/images/overview-components.svg" alt="Pipeline components overview" width="1000" />
+</p>
+
 Reusable GitHub Actions for Terraform workflows. Includes plan, apply, validate, security scanning, cost estimation, and more. Automate your infrastructure deployments with production-ready CI/CD pipelines.
 
 ---
