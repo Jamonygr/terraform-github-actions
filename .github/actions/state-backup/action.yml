@@ -20,6 +20,10 @@ inputs:
   azure_credentials:
     description: 'Azure credentials JSON (legacy - use OIDC instead)'
     required: false
+  # Storage Account Key (Alternative auth)
+  access_key:
+    description: 'Storage account access key (optional, alternative to RBAC)'
+    required: false
   # State Configuration
   storage_account:
     description: 'State storage account'
@@ -91,10 +95,18 @@ runs:
     - name: Create Backup Container
       shell: bash
       run: |
+        AUTH_MODE="${{ inputs.access_key && 'key' || 'login' }}"
+        EXTRA_ARGS=""
+        if [ -n "${{ inputs.access_key }}" ]; then
+          EXTRA_ARGS="--account-key ${{ inputs.access_key }}"
+        else
+          EXTRA_ARGS="--auth-mode login"
+        fi
+        
         az storage container create \
           --account-name ${{ inputs.storage_account }} \
           --name ${{ inputs.container }}-backups \
-          --auth-mode login \
+          $EXTRA_ARGS \
           2>/dev/null || true
         echo "✅ Backup container ready" >> $GITHUB_STEP_SUMMARY
 
@@ -105,12 +117,19 @@ runs:
         TIMESTAMP=$(date +%Y%m%d-%H%M%S)
         BACKUP_NAME="${{ inputs.state_key }}.${{ inputs.backup_prefix }}-${TIMESTAMP}"
         
+        # Determine auth method
+        if [ -n "${{ inputs.access_key }}" ]; then
+          AUTH_ARGS="--account-key ${{ inputs.access_key }}"
+        else
+          AUTH_ARGS="--auth-mode login"
+        fi
+        
         # Check if source state exists
         STATE_EXISTS=$(az storage blob exists \
           --account-name ${{ inputs.storage_account }} \
           --container-name ${{ inputs.container }} \
           --name ${{ inputs.state_key }} \
-          --auth-mode login \
+          $AUTH_ARGS \
           --query "exists" -o tsv 2>/dev/null || echo "false")
         
         if [ "$STATE_EXISTS" == "true" ]; then
@@ -122,14 +141,14 @@ runs:
             --source-account-name ${{ inputs.storage_account }} \
             --source-container ${{ inputs.container }} \
             --source-blob ${{ inputs.state_key }} \
-            --auth-mode login
+            $AUTH_ARGS
           
           # Verify backup was created
           BACKUP_EXISTS=$(az storage blob exists \
             --account-name ${{ inputs.storage_account }} \
             --container-name ${{ inputs.container }}-backups \
             --name "$BACKUP_NAME" \
-            --auth-mode login \
+            $AUTH_ARGS \
             --query "exists" -o tsv)
           
           if [ "$BACKUP_EXISTS" == "true" ]; then
@@ -163,6 +182,13 @@ runs:
       if: inputs.retention_days != '0'
       shell: bash
       run: |
+        # Determine auth method
+        if [ -n "${{ inputs.access_key }}" ]; then
+          AUTH_ARGS="--account-key ${{ inputs.access_key }}"
+        else
+          AUTH_ARGS="--auth-mode login"
+        fi
+        
         RETENTION_DATE=$(date -d "${{ inputs.retention_days }} days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
                         date -v-${{ inputs.retention_days }}d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
                         echo "")
@@ -174,7 +200,7 @@ runs:
           OLD_BACKUPS=$(az storage blob list \
             --account-name ${{ inputs.storage_account }} \
             --container-name ${{ inputs.container }}-backups \
-            --auth-mode login \
+            $AUTH_ARGS \
             --query "[?properties.lastModified < '$RETENTION_DATE'].name" -o tsv 2>/dev/null || echo "")
           
           if [ -n "$OLD_BACKUPS" ]; then
@@ -184,7 +210,7 @@ runs:
                 --account-name ${{ inputs.storage_account }} \
                 --container-name ${{ inputs.container }}-backups \
                 --name "$blob" \
-                --auth-mode login \
+                $AUTH_ARGS \
                 2>/dev/null || true
               COUNT=$((COUNT + 1))
             done

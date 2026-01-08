@@ -696,9 +696,11 @@ jobs:
           azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
           azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          access_key: ${{ secrets.ARM_ACCESS_KEY }}
           storage_account: ${{ secrets.TF_STATE_SA }}
           resource_group: ${{ secrets.TF_STATE_RG }}
           state_key: ${{ env.ENVIRONMENT }}.terraform.tfstate
+        continue-on-error: true  # Don't fail apply if backup fails (e.g., first deployment)
 
       - name: Apply
         id: apply
