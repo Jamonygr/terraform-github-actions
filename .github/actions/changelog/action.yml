@@ -64,24 +64,20 @@ runs:
           CHANGES="- No plan output available"
         fi
         
-        # Create changelog entry file
-        cat > changelog-entry.md << 'CHANGELOG_EOF'
-## [$COMMIT_SHA] - $DATE
-
-**Environment:** ENVIRONMENT_PLACEHOLDER
-**Actor:** $GITHUB_ACTOR
-**Workflow Run:** [$GITHUB_RUN_ID](RUN_URL_PLACEHOLDER)
-
-### Changes
-$CHANGES
-
----
-
-CHANGELOG_EOF
-        
-        # Replace placeholders
-        sed -i "s|ENVIRONMENT_PLACEHOLDER|${{ inputs.environment }}|g" changelog-entry.md
-        sed -i "s|RUN_URL_PLACEHOLDER|$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID|g" changelog-entry.md
+        # Create changelog entry file using echo to avoid YAML parsing issues with heredoc
+        {
+          echo "## [$COMMIT_SHA] - $DATE"
+          echo ""
+          echo "**Environment:** ${{ inputs.environment }}"
+          echo "**Actor:** $GITHUB_ACTOR"
+          echo "**Workflow Run:** [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          echo ""
+          echo "### Changes"
+          echo "$CHANGES"
+          echo ""
+          echo "---"
+          echo ""
+        } > changelog-entry.md
         
         echo "summary=Deployment $COMMIT_SHA to ${{ inputs.environment }}" >> $GITHUB_OUTPUT
         echo "date=$DATE" >> $GITHUB_OUTPUT

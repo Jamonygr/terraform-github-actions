@@ -246,6 +246,8 @@ The included workflow (`terraform.yml`) implements a comprehensive 10-stage pipe
 | 9 | `apply` | Apply infrastructure changes | - |
 | 10 | `destroy` | Destroy infrastructure | - |
 
+Additional optional stages (enabled via repository variables) include Terraform tests, module contract checks, terraform-docs enforcement, Terrascan scans, tag audits, canary apply, ephemeral PR environments, and repo hygiene checks.
+
 ---
 
 ## ⚙️ Configuration
@@ -254,10 +256,13 @@ The included workflow (`terraform.yml`) implements a comprehensive 10-stage pipe
 
 | Input | Description | Default | Options |
 |-------|-------------|---------|---------|
-| `environment` | Target environment | `lab` | `dev`, `lab`, `prod` |
+| `mode` | Pipeline mode | `single` | `single`, `matrix`, `drift` |
+| `environment` | Target environment (single mode) | `lab` | `dev`, `lab`, `staging`, `prod` |
+| `environments` | Target environments (matrix mode) | `dev,staging,prod` | Comma-separated list |
 | `action` | Pipeline action | `plan` | `plan`, `apply`, `destroy` |
 | `destroy_confirm` | Destruction confirmation | - | Type `DESTROY` |
 | `working_directory` | Terraform working directory | `.` | Any relative path |
+| `create_drift_issue` | Create GitHub issue on drift | `true` | `true`, `false` |
 
 ### Environment Variables
 
@@ -267,11 +272,33 @@ env:
   ENVIRONMENT: 'lab'            # Default environment
 ```
 
+### Optional Repository Variables
+
+| Variable Name | Description |
+|--------------|-------------|
+| `TF_WORKING_DIRECTORY` | Default Terraform working directory (e.g., `./test`) |
+| `ENABLE_TERRAFORM_TESTS` | Set to `false` to disable `terraform test` stage |
+| `ENABLE_MODULE_CONTRACTS` | Enable module contract checks for `modules/` |
+| `FAIL_ON_MODULE_CONTRACTS` | Fail pipeline when contract checks find issues |
+| `DOCS_ENFORCE` | Enforce terraform-docs check (fail on diff) |
+| `ENABLE_TERRASCAN` | Enable Terrascan security scan |
+| `TERRASCAN_VERSION` | Override Terrascan version (default `1.18.3`) |
+| `REQUIRED_TAG_KEYS` | Comma-separated required tag keys for tag audit |
+| `FAIL_ON_TAG_AUDIT` | Fail pipeline when tag audit finds missing tags |
+| `ENABLE_CANARY` | Enable canary apply before prod |
+| `CANARY_ENVIRONMENT` | Environment name for canary (e.g., `canary`) |
+| `CANARY_VAR_FILE` | Var file for canary (default `environments/<env>.tfvars`) |
+| `CANARY_STATE_KEY` | State key for canary (default `<env>.terraform.tfstate`) |
+| `ENABLE_EPHEMERAL_ENV` | Enable ephemeral PR environment (apply + destroy) |
+| `EPHEMERAL_VAR_FILE` | Var file for ephemeral PR environment |
+| `ENABLE_REPO_HYGIENE` | Enable repo hygiene checks (branch protection) |
+| `FAIL_ON_REPO_HYGIENE` | Fail pipeline if hygiene checks fail |
+
 ### Concurrency Control
 
 ```yaml
 concurrency:
-  group: terraform-${{ github.ref }}-${{ github.event.inputs.environment }}
+  group: terraform-${{ github.ref }}-${{ inputs.environment || github.event.inputs.environment || github.event.inputs.mode || 'default' }}
   cancel-in-progress: false     # Never cancel in-progress runs
 ```
 

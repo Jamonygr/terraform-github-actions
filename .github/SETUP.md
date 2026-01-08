@@ -304,6 +304,22 @@ az role assignment create \
 | `SLACK_WEBHOOK_URL` | Slack webhook for notifications |
 | `TEAMS_WEBHOOK_URL` | Microsoft Teams webhook |
 | `TF_WORKING_DIRECTORY` | Default Terraform working directory (e.g., `./test`) |
+| `ENABLE_TERRAFORM_TESTS` | Set to `false` to disable `terraform test` stage |
+| `ENABLE_MODULE_CONTRACTS` | Enable module contract checks for `modules/` |
+| `FAIL_ON_MODULE_CONTRACTS` | Fail pipeline when contract checks find issues |
+| `DOCS_ENFORCE` | Enforce terraform-docs check (fail on diff) |
+| `ENABLE_TERRASCAN` | Enable Terrascan security scan |
+| `TERRASCAN_VERSION` | Override Terrascan version (default `1.18.3`) |
+| `REQUIRED_TAG_KEYS` | Comma-separated required tag keys for tag audit |
+| `FAIL_ON_TAG_AUDIT` | Fail pipeline when tag audit finds missing tags |
+| `ENABLE_CANARY` | Enable canary apply before prod |
+| `CANARY_ENVIRONMENT` | Environment name for canary (e.g., `canary`) |
+| `CANARY_VAR_FILE` | Var file for canary (default `environments/<env>.tfvars`) |
+| `CANARY_STATE_KEY` | State key for canary (default `<env>.terraform.tfstate`) |
+| `ENABLE_EPHEMERAL_ENV` | Enable ephemeral PR environment (apply + destroy) |
+| `EPHEMERAL_VAR_FILE` | Var file for ephemeral PR environment |
+| `ENABLE_REPO_HYGIENE` | Enable repo hygiene checks (branch protection) |
+| `FAIL_ON_REPO_HYGIENE` | Fail pipeline if hygiene checks fail |
 
 ---
 

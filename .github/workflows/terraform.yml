@@ -175,6 +175,56 @@ jobs:
           echo "$ENVS" | tr ',' '\n' | while read env; do echo "- $env"; done >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
+  # STAGE 0B: REPO HYGIENE (Optional)
+  # =========================================================================
+  repo-hygiene:
+    name: '0?? Repo Hygiene'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: router
+    if: vars.ENABLE_REPO_HYGIENE == 'true' && needs.router.outputs.is_drift != 'true'
+    steps:
+      - name: Check Branch Protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          API="https://api.github.com/repos/${{ github.repository }}"
+          DEFAULT_BRANCH=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$API" | jq -r '.default_branch // "main"')
+          STATUS=$(curl -s -o /tmp/branch-protection.json -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$API/branches/$DEFAULT_BRANCH/protection")
+          
+          echo "## ?? Repo Hygiene" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Default branch: **$DEFAULT_BRANCH**" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$STATUS" != "200" ]; then
+            echo "?? Branch protection not readable (HTTP $STATUS). Configure repo permissions or branch protection." >> $GITHUB_STEP_SUMMARY
+            if [ "${{ vars.FAIL_ON_REPO_HYGIENE }}" == "true" ]; then
+              exit 1
+            fi
+            exit 0
+          fi
+          
+          REVIEWS=$(jq -r '.required_pull_request_reviews != null' /tmp/branch-protection.json)
+          CHECKS=$(jq -r '.required_status_checks != null' /tmp/branch-protection.json)
+          
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Required PR reviews | $REVIEWS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Required status checks | $CHECKS |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$REVIEWS" != "true" ] || [ "$CHECKS" != "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "?? Missing recommended protections on $DEFAULT_BRANCH" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ vars.FAIL_ON_REPO_HYGIENE }}" == "true" ]; then
+              exit 1
+            fi
+          fi
+
+  # =========================================================================
   # STAGE 1: FORMAT CHECK (Skip for drift mode)
   # =========================================================================
   format:
@@ -226,6 +276,114 @@ jobs:
           terraform init -backend=false
           terraform validate
           echo "## ✅ Validation Passed" >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
+  # STAGE 2B: TERRAFORM TESTS (Skip for drift mode)
+  # =========================================================================
+  terraform-tests:
+    name: '2?? Terraform Tests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Test
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## ?? Terraform Tests" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ vars.ENABLE_TERRAFORM_TESTS }}" == "false" ]; then
+            echo "Disabled via ENABLE_TERRAFORM_TESTS=false; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          TEST_FILES=$(find . -name "*.tftest.hcl" -o -name "*.tftest.json" 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$TEST_FILES" -eq 0 ]; then
+            echo "No .tftest files found; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          terraform init -backend=false
+          terraform test -no-color
+          echo "? Terraform tests passed" >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
+  # STAGE 2C: MODULE CONTRACT CHECKS (Optional)
+  # =========================================================================
+  module-contracts:
+    name: '2?? Module Contracts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check Module Contracts
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## ?? Module Contract Checks" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ vars.ENABLE_MODULE_CONTRACTS }}" != "true" ]; then
+            echo "ENABLE_MODULE_CONTRACTS not enabled; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          if [ ! -d "modules" ]; then
+            echo "No modules/ directory found; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          FAIL=0
+          for mod in modules/*/; do
+            [ -d "$mod" ] || continue
+            NAME=$(basename "$mod")
+            echo "### Module: $NAME" >> $GITHUB_STEP_SUMMARY
+            
+            if [ ! -f "${mod}variables.tf" ]; then
+              echo "- ?? Missing variables.tf" >> $GITHUB_STEP_SUMMARY
+              FAIL=1
+            fi
+            if [ ! -f "${mod}outputs.tf" ]; then
+              echo "- ?? Missing outputs.tf" >> $GITHUB_STEP_SUMMARY
+              FAIL=1
+            fi
+            if [ ! -f "${mod}README.md" ]; then
+              echo "- ?? Missing README.md" >> $GITHUB_STEP_SUMMARY
+              FAIL=1
+            fi
+            
+            if [ -f "${mod}variables.tf" ]; then
+              MISSING_DESC=$(awk '
+                /^variable[[:space:]]+"/ {invar=1; desc=0}
+                invar && /description[[:space:]]*=/ {desc=1}
+                /^}/ {if (invar && desc==0) missing++; invar=0}
+                END {print missing+0}
+              ' "${mod}variables.tf")
+              if [ "$MISSING_DESC" -gt 0 ]; then
+                echo "- ?? $MISSING_DESC variable(s) missing description" >> $GITHUB_STEP_SUMMARY
+                FAIL=1
+              else
+                echo "- ? Variable descriptions present" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+          
+          if [ "$FAIL" -eq 1 ]; then
+            if [ "${{ vars.FAIL_ON_MODULE_CONTRACTS }}" == "true" ]; then
+              exit 1
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "?? Contract issues found; set FAIL_ON_MODULE_CONTRACTS=true to enforce." >> $GITHUB_STEP_SUMMARY
+          fi
 
   # =========================================================================
   # STAGE 3: SECURITY - TFSEC (Skip for drift mode)
@@ -297,6 +455,55 @@ jobs:
         continue-on-error: true
 
       - run: echo "## 🛡️ Checkov scan completed" >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
+  # STAGE 3: SECURITY - TERRASCAN (Optional)
+  # =========================================================================
+  security-terrascan:
+    name: '3?? Security - Terrascan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Terrascan
+        if: vars.ENABLE_TERRASCAN == 'true'
+        shell: bash
+        run: |
+          VERSION="${{ vars.TERRASCAN_VERSION || '1.18.3' }}"
+          curl -sSL "https://github.com/tenable/terrascan/releases/download/v${VERSION}/terrascan_${VERSION}_Linux_x86_64.tar.gz" | tar -xz
+          chmod +x terrascan
+          sudo mv terrascan /usr/local/bin/
+          terrascan version
+
+      - name: Run Terrascan
+        if: vars.ENABLE_TERRASCAN == 'true'
+        shell: bash
+        run: |
+          set +e
+          terrascan scan -i terraform -d "${{ env.WORKING_DIRECTORY }}" -o sarif > terrascan.sarif
+          EXITCODE=$?
+          if [ $EXITCODE -ne 0 ]; then
+            echo "?? Terrascan reported findings" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "## ?? Terrascan scan completed" >> $GITHUB_STEP_SUMMARY
+        continue-on-error: true
+
+      - name: Terrascan Skipped
+        if: vars.ENABLE_TERRASCAN != 'true'
+        shell: bash
+        run: |
+          echo "## ?? Terrascan scan skipped (ENABLE_TERRASCAN not set)" >> $GITHUB_STEP_SUMMARY
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: vars.ENABLE_TERRASCAN == 'true' && hashFiles('terrascan.sarif') != ''
+        with:
+          sarif_file: terrascan.sarif
+        continue-on-error: true
 
   # =========================================================================
   # STAGE 3: SECRET SCANNING (Skip for drift mode)
@@ -443,13 +650,54 @@ jobs:
           working_directory: ${{ env.WORKING_DIRECTORY }}
 
   # =========================================================================
+  # STAGE 4B: TERRAFORM DOCS CHECK (Optional)
+  # =========================================================================
+  docs-check:
+    name: '4?? Docs Check'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/terraform-docs
+        if: vars.DOCS_ENFORCE == 'true'
+        with:
+          recursive: 'true'
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Verify Docs Are Up To Date
+        if: vars.DOCS_ENFORCE == 'true'
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "## ?? Terraform Docs Check" >> $GITHUB_STEP_SUMMARY
+            echo "? Docs are up to date" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          echo "## ?? Terraform Docs Check" >> $GITHUB_STEP_SUMMARY
+          echo "? Docs are out of date. Run terraform-docs and commit changes." >> $GITHUB_STEP_SUMMARY
+          git status --short >> $GITHUB_STEP_SUMMARY
+          exit 1
+
+      - name: Docs Check Skipped
+        if: vars.DOCS_ENFORCE != 'true'
+        shell: bash
+        run: |
+          echo "## ?? Terraform Docs Check" >> $GITHUB_STEP_SUMMARY
+          echo "Docs enforcement disabled (DOCS_ENFORCE not set)." >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
   # STAGE 5: GRAPH VISUALIZATION (Skip for drift mode)
   # =========================================================================
   graph:
     name: '5️⃣ Analysis - Graph'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [router, security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
+    needs: [router, security-tfsec, security-checkov, security-terrascan, secret-scan, shellcheck, tflint, policy-check]
     if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
@@ -472,7 +720,7 @@ jobs:
     name: '5️⃣ Analysis - Versions'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [router, security-tfsec, security-checkov, secret-scan, shellcheck, tflint, policy-check]
+    needs: [router, security-tfsec, security-checkov, security-terrascan, secret-scan, shellcheck, tflint, policy-check]
     if: needs.router.outputs.is_drift != 'true'
     steps:
       - uses: actions/checkout@v4
@@ -498,8 +746,8 @@ jobs:
     name: '6️⃣ Analysis - Cost'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [router, graph, module-versions]
-    if: needs.router.outputs.is_drift != 'true'
+    needs: [router, graph, module-versions, terraform-tests, module-contracts, docs-check]
+    if: needs.router.outputs.is_drift != 'true' && needs.router.outputs.is_matrix != 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -551,8 +799,8 @@ jobs:
     name: '7️⃣ Plan'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [router, graph, module-versions]
-    if: needs.router.outputs.is_drift != 'true'
+    needs: [router, graph, module-versions, terraform-tests, module-contracts, docs-check]
+    if: needs.router.outputs.is_drift != 'true' && needs.router.outputs.is_matrix != 'true'
     outputs:
       has_changes: ${{ steps.plan.outputs.has_changes }}
       add: ${{ steps.plan.outputs.add }}
@@ -612,6 +860,79 @@ jobs:
           collapse_plan: 'true'
 
   # =========================================================================
+  # STAGE 7A: TAGGING AUDIT (Optional)
+  # =========================================================================
+  tag-audit:
+    name: '7?? Tag Audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [router, plan]
+    if: needs.router.outputs.is_drift != 'true' && needs.router.outputs.is_matrix != 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          path: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Audit Required Tags
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          REQUIRED="${{ vars.REQUIRED_TAG_KEYS }}"
+          echo "## ?? Tag Audit" >> $GITHUB_STEP_SUMMARY
+          if [ -z "$REQUIRED" ]; then
+            echo "No REQUIRED_TAG_KEYS set; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          if [ ! -f "tfplan.json" ]; then
+            echo "::error::tfplan.json not found in plan artifact" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          IFS=',' read -ra TAGS <<< "$REQUIRED"
+          MISSING_TOTAL=0
+          
+          for raw in "${TAGS[@]}"; do
+            TAG=$(echo "$raw" | xargs)
+            [ -n "$TAG" ] || continue
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Required Tag: $TAG" >> $GITHUB_STEP_SUMMARY
+            
+            MISSING=$(jq -r --arg tag "$TAG" '
+              .resource_changes[]
+              | select(.change.after != null)
+              | select(.change.after.tags? != null)
+              | select(.change.after.tags[$tag] == null)
+              | .address
+            ' tfplan.json)
+            
+            if [ -z "$MISSING" ]; then
+              echo "- ? All tagged resources include $TAG" >> $GITHUB_STEP_SUMMARY
+            else
+              COUNT=$(echo "$MISSING" | wc -l | tr -d " ")
+              MISSING_TOTAL=$((MISSING_TOTAL + COUNT))
+              echo "- ?? $COUNT resource(s) missing $TAG" >> $GITHUB_STEP_SUMMARY
+              echo "$MISSING" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          if [ "$MISSING_TOTAL" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "?? Tag audit found missing required tags." >> $GITHUB_STEP_SUMMARY
+            if [ "${{ vars.FAIL_ON_TAG_AUDIT }}" == "true" ]; then
+              exit 1
+            fi
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "? Tag audit passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # =========================================================================
   # STAGE 7B: INTEGRATION TESTS (PR only)
   # =========================================================================
   integration-tests:
@@ -639,16 +960,225 @@ jobs:
         continue-on-error: true
 
   # =========================================================================
+  # STAGE 7C: EPHEMERAL PR ENVIRONMENT (Optional)
+  # =========================================================================
+  ephemeral-env:
+    name: '7?? Ephemeral PR Environment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [router, plan]
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.router.outputs.is_drift != 'true' &&
+      vars.ENABLE_EPHEMERAL_ENV == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve Ephemeral Config
+        id: config
+        shell: bash
+        run: |
+          VAR_FILE="${{ vars.EPHEMERAL_VAR_FILE }}"
+          if [ -z "$VAR_FILE" ]; then
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "## ?? Ephemeral Environment" >> $GITHUB_STEP_SUMMARY
+            echo "EPHEMERAL_VAR_FILE not set; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          if [ ! -f "${{ env.WORKING_DIRECTORY }}/$VAR_FILE" ]; then
+            echo "## ?? Ephemeral Environment" >> $GITHUB_STEP_SUMMARY
+            echo "::error::Ephemeral var file not found: $VAR_FILE" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          ENV_NAME="ephemeral-pr-${{ github.event.pull_request.number }}"
+          STATE_KEY="${ENV_NAME}.terraform.tfstate"
+          
+          echo "enabled=true" >> $GITHUB_OUTPUT
+          echo "env_name=$ENV_NAME" >> $GITHUB_OUTPUT
+          echo "var_file=$VAR_FILE" >> $GITHUB_OUTPUT
+          echo "state_key=$STATE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Ephemeral Plan
+        id: plan
+        if: steps.config.outputs.enabled == 'true'
+        uses: ./.github/actions/plan
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ steps.config.outputs.state_key }}
+          var_file: ${{ steps.config.outputs.var_file }}
+          environment: ${{ steps.config.outputs.env_name }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+          lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
+
+      - name: Ephemeral Apply
+        if: steps.config.outputs.enabled == 'true'
+        uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ steps.config.outputs.state_key }}
+          environment: ${{ steps.config.outputs.env_name }}
+          plan_artifact: tfplan-${{ steps.config.outputs.env_name }}-${{ github.sha }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+          lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
+
+      - name: Ephemeral Smoke Test
+        if: steps.config.outputs.enabled == 'true'
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## ?? Ephemeral Smoke Test" >> $GITHUB_STEP_SUMMARY
+          terraform state list 2>/dev/null | head -50 >> $GITHUB_STEP_SUMMARY || true
+        continue-on-error: true
+
+      - name: Ephemeral Destroy
+        if: always() && steps.config.outputs.enabled == 'true'
+        uses: ./.github/actions/destroy
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ steps.config.outputs.state_key }}
+          var_file: ${{ steps.config.outputs.var_file }}
+          environment: ${{ steps.config.outputs.env_name }}
+          confirm: 'DESTROY'
+          parallelism: ${{ env.TF_PARALLELISM }}
+
+  # =========================================================================
+  # STAGE 7D: CANARY APPLY (Optional, before prod)
+  # =========================================================================
+  canary:
+    name: '7?? Canary Apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [router, plan]
+    if: |
+      needs.router.outputs.mode == 'single' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'apply'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve Canary Config
+        id: canary
+        shell: bash
+        run: |
+          if [ "${{ vars.ENABLE_CANARY }}" != "true" ] || [ "${{ env.ENVIRONMENT }}" != "prod" ]; then
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "## ?? Canary Apply" >> $GITHUB_STEP_SUMMARY
+            echo "Canary not enabled or target environment is not prod; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          ENV_NAME="${{ vars.CANARY_ENVIRONMENT }}"
+          if [ -z "$ENV_NAME" ]; then
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "## ?? Canary Apply" >> $GITHUB_STEP_SUMMARY
+            echo "CANARY_ENVIRONMENT not set; skipping." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          VAR_FILE="${{ vars.CANARY_VAR_FILE }}"
+          if [ -z "$VAR_FILE" ]; then
+            VAR_FILE="environments/$ENV_NAME.tfvars"
+          fi
+          
+          if [ ! -f "${{ env.WORKING_DIRECTORY }}/$VAR_FILE" ]; then
+            echo "## ?? Canary Apply" >> $GITHUB_STEP_SUMMARY
+            echo "::error::Canary var file not found: $VAR_FILE" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          STATE_KEY="${{ vars.CANARY_STATE_KEY }}"
+          if [ -z "$STATE_KEY" ]; then
+            STATE_KEY="$ENV_NAME.terraform.tfstate"
+          fi
+          
+          echo "enabled=true" >> $GITHUB_OUTPUT
+          echo "env_name=$ENV_NAME" >> $GITHUB_OUTPUT
+          echo "var_file=$VAR_FILE" >> $GITHUB_OUTPUT
+          echo "state_key=$STATE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Canary Plan
+        id: canary-plan
+        if: steps.canary.outputs.enabled == 'true'
+        uses: ./.github/actions/plan
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ steps.canary.outputs.state_key }}
+          var_file: ${{ steps.canary.outputs.var_file }}
+          environment: ${{ steps.canary.outputs.env_name }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+          lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
+
+      - name: Canary Apply
+        if: steps.canary.outputs.enabled == 'true'
+        uses: ./.github/actions/apply
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          working_directory: ${{ env.WORKING_DIRECTORY }}
+          use_oidc: ${{ env.USE_OIDC }}
+          azure_client_id: ${{ env.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ env.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          backend_resource_group: ${{ secrets.TF_STATE_RG }}
+          backend_storage_account: ${{ secrets.TF_STATE_SA }}
+          state_key: ${{ steps.canary.outputs.state_key }}
+          environment: ${{ steps.canary.outputs.env_name }}
+          plan_artifact: tfplan-${{ steps.canary.outputs.env_name }}-${{ github.sha }}
+          parallelism: ${{ env.TF_PARALLELISM }}
+          lock_timeout: ${{ env.TF_LOCK_TIMEOUT }}
+
+  # =========================================================================
   # STAGE 8: APPLY (Single environment mode only)
   # =========================================================================
   apply:
     name: '8️⃣ Apply'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [router, plan, cost-estimate]
+    needs: [router, plan, cost-estimate, tag-audit, canary]
     if: |
       always() &&
       needs.plan.result == 'success' &&
+      needs.tag-audit.result != 'failure' &&
+      needs.canary.result != 'failure' &&
       needs.router.outputs.mode != 'drift' &&
       needs.router.outputs.mode != 'matrix' &&
       github.event_name == 'workflow_dispatch' && 
@@ -1070,7 +1600,7 @@ jobs:
     name: '📋 Matrix Plan - ${{ matrix.environment }}'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [router, security-tfsec, security-checkov]
+    needs: [router, validate, terraform-tests, module-contracts, docs-check, security-tfsec, security-checkov, security-terrascan, secret-scan, shellcheck, tflint, policy-check]
     if: needs.router.outputs.is_matrix == 'true'
     strategy:
       fail-fast: false
