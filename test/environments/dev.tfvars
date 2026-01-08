@@ -2,8 +2,8 @@
 # DEV ENVIRONMENT CONFIGURATION
 # =============================================================================
 
-# Replace with your subscription ID
-subscription_id = "YOUR_SUBSCRIPTION_ID"
+# Azure subscription
+subscription_id = "97386c43-2906-40dc-9493-4e82e13b31bf"
 
 # Project settings
 project     = "tftest"
