@@ -280,7 +280,7 @@ The unified workflow (`terraform.yml`) supports single, matrix, and drift modes.
 | 9 | `destroy` | Manual destroy + confirm | Environment gates |
 | 10 | `metrics` | Post-apply reporting | Single mode only |
 
-Optional post-plan actions include tag audit, Terratest PR integration tests, ephemeral PR environments, and canary apply. See [Pipeline Stages](wiki/Pipeline-Stages.md) for the full list and mode-specific jobs (matrix and drift).
+Optional post-plan actions include tag audit, Terratest PR integration tests, ephemeral PR environments, and canary apply. Many stages are gated by mode, event, or repo variables, so plan-only runs will show skipped jobs. See [Pipeline Stages](wiki/Pipeline-Stages.md) for the full list and mode-specific jobs (matrix and drift).
 
 ---
 ## ⚙️ Configuration
@@ -294,8 +294,10 @@ Optional post-plan actions include tag audit, Terratest PR integration tests, ep
 | `environments` | Target environments (matrix mode) | `dev,staging,prod` | Comma-separated list |
 | `action` | Pipeline action | `plan` | `plan`, `apply`, `destroy` |
 | `destroy_confirm` | Destruction confirmation | - | Type `DESTROY` |
-| `working_directory` | Terraform working directory | `.` | Any relative path |
+| `working_directory` | Terraform working directory | `./test` | Any relative path |
 | `create_drift_issue` | Create GitHub issue on drift | `true` | `true`, `false` |
+
+Note: this repository ships a minimal Terraform config in `./test`, so the workflow defaults to `./test`. Set `working_directory` to `.` or your own path (or set `TF_WORKING_DIRECTORY`) when using your own Terraform layout.
 
 ### Environment Variables
 
@@ -303,6 +305,7 @@ Optional post-plan actions include tag audit, Terratest PR integration tests, ep
 env:
   TF_VERSION: '1.9.0'          # Terraform version
   ENVIRONMENT: 'lab'            # Default environment
+  WORKING_DIRECTORY: './test'   # Default for this repo; override as needed
 ```
 
 ### Optional Repository Variables
@@ -326,6 +329,8 @@ env:
 | `EPHEMERAL_VAR_FILE` | Var file for ephemeral PR environment |
 | `ENABLE_REPO_HYGIENE` | Enable repo hygiene checks (branch protection) |
 | `FAIL_ON_REPO_HYGIENE` | Fail pipeline if hygiene checks fail |
+
+Additional optional variables (health checks, dependency checks, quotas, SBOM, auto-rollback, etc.) are documented in [Pipeline Stages](wiki/Pipeline-Stages.md).
 
 ### Concurrency Control
 
@@ -430,6 +435,11 @@ az login --service-principal \
 terraform force-unlock <LOCK_ID>
 ```
 
+#### Variables File Not Found
+
+- Ensure `working_directory` points to your Terraform configuration (this repo defaults to `./test`).
+- Ensure `var_file` paths are relative to the working directory.
+
 #### Security Scan Fails
 
 Security scans use `soft_fail: true` by default. To block on failures:
@@ -488,6 +498,8 @@ terraform-github-actions/
 │   ├── Actions-Reference.md   # Actions catalog
 │   ├── Troubleshooting.md     # Common issues
 │   ├── assets/                # Diagrams and images
+├── test/                     # Minimal Terraform example (default workflow target)
+├── tests/                    # Terratest integration tests
 └── README.md                  # This file
 ```
 
@@ -499,6 +511,8 @@ terraform-github-actions/
 | `SETUP.md` | Step-by-step Azure and GitHub setup |
 | `actions/*/action.yml` | Individual composite actions |
 | `wiki/` | Local wiki documentation and diagrams |
+| `test/` | Minimal Terraform example (default workflow target) |
+| `tests/` | Terratest integration tests (PR-only) |
 
 ---
 

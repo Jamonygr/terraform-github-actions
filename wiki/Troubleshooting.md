@@ -17,6 +17,7 @@
 - Check the workflow summary for plan output.
 - Validate `var_file` paths and `working_directory`.
 - Confirm provider credentials and required Azure resource providers.
+- If you see `Given variables file ... does not exist`, make sure the workflow is pointing at the correct working directory (this repo defaults to `./test`) and that the var file path is relative to that directory.
 
 ## Drift detection failures
 

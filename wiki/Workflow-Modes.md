@@ -26,6 +26,7 @@ action: plan
 
 - Plan runs on PRs and pushes by default.
 - Apply and destroy require `workflow_dispatch` with the correct `action` value.
+- This repo defaults to `working_directory: ./test`; override with `working_directory` or `TF_WORKING_DIRECTORY` for your own layouts.
 
 ## Matrix mode
 

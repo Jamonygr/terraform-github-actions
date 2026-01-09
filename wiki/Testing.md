@@ -14,6 +14,7 @@ Testing can be enabled at multiple layers: Terraform unit tests, Terratest integ
 - The `integration-tests` job runs on pull requests.
 - Configure the tests under `tests/`.
 - Results are uploaded as JUnit when `output_format=junit`.
+- The repo includes `tests/.gitkeep` so the folder exists; add your Go tests under `tests/` to enable coverage.
 
 ## Ephemeral PR environments (optional)
 

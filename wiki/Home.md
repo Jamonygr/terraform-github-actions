@@ -71,7 +71,8 @@ Welcome to the documentation for the Terraform GitHub Actions repository. This w
 - `.github/workflows/terraform.yml` is the unified pipeline.
 - `.github/actions/` contains all composite actions used by the workflow.
 - `.github/SETUP.md` provides the Azure and GitHub setup checklist.
-- `test/` contains a minimal Terraform example for validation.
+- `test/` contains a minimal Terraform example for validation (this repo defaults the workflow to `./test`).
+- `tests/` is the placeholder folder for Terratest integration tests on PRs.
 
 ## Getting started path
 

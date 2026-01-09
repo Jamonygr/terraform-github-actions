@@ -38,6 +38,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 8 | `apply` | Apply in single mode (manual) |
 | 9 | `destroy` | Destroy in single mode (manual) |
 | 10 | `metrics` | Post-apply metrics and audit summary (single mode only) |
+| 11 | `compliance-report` | Compliance report after successful apply |
 
 ## Optional stages (enable with variables)
 
@@ -50,7 +51,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 4 | `docs-check` | `DOCS_ENFORCE=true` | Fails if terraform-docs output changed |
 | 4e | `azure-policy-check` | `ENABLE_AZURE_POLICY_CHECK=true` | Azure Policy compliance pre-check |
 | 5b | `blast-radius` | `ENABLE_BLAST_RADIUS=true` | Visual blast radius analysis |
-| 5c | `resource-dependency-map` | `ENABLE_DEPENDENCY_MAP=true` | Resource dependency mapping |
+| 5c | `dependency-map` | `ENABLE_DEPENDENCY_MAP=true` | Resource dependency mapping |
 | 7 | `tag-audit` | `REQUIRED_TAG_KEYS` set | Verifies required tag keys in plan |
 | 7 | `integration-tests` | PR only | Terratest execution (soft fail) |
 | 7 | `canary` | `ENABLE_CANARY=true` and prod target | Canary apply before prod apply |
@@ -60,9 +61,15 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 10a | `health-check` | `ENABLE_HEALTH_CHECK=true` | Post-deployment health probes |
 | 10b | `e2e-tests` | `ENABLE_E2E_TESTS=true` | E2E smoke tests after apply |
 | 10c | `performance-baseline` | `ENABLE_PERFORMANCE_BASELINE=true` | Capture performance metrics |
-| 11 | `compliance-report` | Always (after apply) | Generates compliance documentation |
 | 11a | `sbom` | `ENABLE_SBOM=true` | Software Bill of Materials generation |
 | 12 | `auto-rollback` | `ENABLE_AUTO_ROLLBACK=true` | Auto-rollback on health check failure |
+
+## Why stages are skipped
+
+- Mode-specific jobs only run in their mode (single vs matrix vs drift).
+- Apply/destroy jobs run only on manual dispatch with `action=apply` or `action=destroy`.
+- PR-only jobs run only on pull requests (integration tests, ephemeral env).
+- Optional jobs require their enable variables to be set.
 
 ## Mode-specific stages
 

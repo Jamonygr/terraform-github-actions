@@ -20,6 +20,7 @@ This page covers apply/destroy flows, backups, notifications, and audit logging.
 
 - `state-backup` runs before apply/destroy.
 - Use `state-restore` to recover a previous snapshot.
+- Backups are stored in the `tfstate-backups` container.
 
 ![State backup and restore](assets/state-backup.svg)
 

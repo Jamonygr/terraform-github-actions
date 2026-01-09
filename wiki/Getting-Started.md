@@ -65,6 +65,7 @@ See [.github/SETUP.md](../.github/SETUP.md) for PowerShell and Bash scripts.
    - `mode`: `single`
    - `environment`: `lab` (or another non-prod environment)
    - `action`: `plan`
+   - `working_directory`: `./test` (default in this repo)
 
 ## Workflow triggers
 
@@ -79,10 +80,13 @@ You can enable additional stages by setting repository variables. See [Pipeline 
 If you want to validate Terraform locally before pushing:
 
 ```bash
+cd test
 terraform fmt -recursive
-terraform init
+terraform init -backend=false
 terraform validate
 terraform plan -var-file=environments/lab.tfvars
 ```
+
+If your Terraform code is not under `./test`, use your own working directory and var file paths.
 
 _Last updated: January 2026_
