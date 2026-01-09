@@ -2408,7 +2408,7 @@ jobs:
       needs.apply.result == 'success' &&
       needs.health-check.outputs.health_status == 'unhealthy' &&
       vars.ENABLE_AUTO_ROLLBACK == 'true'
-    environment: ${{ format('{0}-rollback', env.ENVIRONMENT) }}
+    environment: ${{ format('{0}-rollback', inputs.environment || github.event.inputs.environment || 'lab') }}
     steps:
       - uses: actions/checkout@v4
         with:
