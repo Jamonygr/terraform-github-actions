@@ -13,11 +13,29 @@ name: 'Terraform Pipeline'
 on:
   # Code changes trigger validation and planning
   push:
-    branches: [main]
-    paths: ['**.tf', '**.tfvars', 'modules/**', 'landing-zones/**', 'environments/**']
+    branches: [main, master]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - 'modules/**'
+      - 'landing-zones/**'
+      - 'environments/**'
+      - '.github/**'
+      - 'README.md'
+      - 'docs/**'
+      - 'wiki/**'
   pull_request:
-    branches: [main]
-    paths: ['**.tf', '**.tfvars']
+    branches: [main, master]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - 'modules/**'
+      - 'landing-zones/**'
+      - 'environments/**'
+      - '.github/**'
+      - 'README.md'
+      - 'docs/**'
+      - 'wiki/**'
   
   # Scheduled drift detection (daily at 6 AM UTC)
   schedule:
