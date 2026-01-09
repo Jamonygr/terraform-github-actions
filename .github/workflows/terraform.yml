@@ -62,7 +62,7 @@ on:
       working_directory:
         description: 'Working directory'
         required: false
-        default: '.'
+        default: './test'
         type: string
       create_drift_issue:
         description: 'Create issue on drift (drift mode)'
@@ -120,7 +120,7 @@ permissions:
 env:
   TF_VERSION: ${{ inputs.terraform_version || vars.TF_VERSION || '1.9.0' }}
   ENVIRONMENT: ${{ inputs.environment || github.event.inputs.environment || 'lab' }}
-  WORKING_DIRECTORY: ${{ (inputs.working_directory && inputs.working_directory != '.' && inputs.working_directory) || (github.event.inputs.working_directory && github.event.inputs.working_directory != '.' && github.event.inputs.working_directory) || (vars.TF_WORKING_DIRECTORY && vars.TF_WORKING_DIRECTORY != '.' && vars.TF_WORKING_DIRECTORY) || (hashFiles('*.tf') != '' && '.' || (hashFiles('test/**/*.tf') != '' && './test' || '.')) }}
+  WORKING_DIRECTORY: ${{ inputs.working_directory || github.event.inputs.working_directory || vars.TF_WORKING_DIRECTORY || './test' }}
   # Pipeline Mode Detection
   PIPELINE_MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}
   # OIDC Configuration (set USE_OIDC=true in repo variables to enable)
