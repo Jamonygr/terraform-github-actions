@@ -16,27 +16,33 @@
   <rect class="bg" x="0" y="0" width="1200" height="360" />
   <text class="title" x="40" y="50">Environment Promotion</text>
 
-  <rect class="box" x="40" y="140" width="200" height="70" />
+  <rect class="box" x="40" y="140" width="180" height="70" />
   <text class="label" x="60" y="170">Dev</text>
   <text class="sub" x="60" y="192">auto apply</text>
 
-  <rect class="box" x="300" y="140" width="200" height="70" />
-  <text class="label" x="320" y="170">Staging</text>
-  <text class="sub" x="320" y="192">approval optional</text>
+  <rect class="box" x="260" y="140" width="180" height="70" />
+  <text class="label" x="280" y="170">Lab</text>
+  <text class="sub" x="280" y="192">default env</text>
 
-  <rect class="box" x="560" y="140" width="200" height="70" />
-  <text class="label" x="580" y="170">Canary</text>
-  <text class="sub" x="580" y="192">optional gate</text>
+  <rect class="box" x="480" y="140" width="180" height="70" />
+  <text class="label" x="500" y="170">Staging</text>
+  <text class="sub" x="500" y="192">approval optional</text>
 
-  <rect class="box" x="820" y="140" width="200" height="70" />
-  <text class="label" x="840" y="170">Prod</text>
-  <text class="sub" x="840" y="192">protected</text>
+  <rect class="box" x="700" y="140" width="180" height="70" />
+  <text class="label" x="720" y="170">Canary</text>
+  <text class="sub" x="720" y="192">optional gate</text>
+
+  <rect class="box" x="920" y="140" width="180" height="70" />
+  <text class="label" x="940" y="170">Prod</text>
+  <text class="sub" x="940" y="192">protected</text>
 
   <text class="note" x="235" y="120">promote</text>
-  <text class="note" x="495" y="120">gate</text>
-  <text class="note" x="755" y="120">approval</text>
+  <text class="note" x="455" y="120">review</text>
+  <text class="note" x="675" y="120">gate</text>
+  <text class="note" x="895" y="120">approval</text>
 
-  <line class="line" x1="240" y1="175" x2="300" y2="175" />
-  <line class="line" x1="500" y1="175" x2="560" y2="175" />
-  <line class="line" x1="760" y1="175" x2="820" y2="175" />
+  <line class="line" x1="220" y1="175" x2="260" y2="175" />
+  <line class="line" x1="440" y1="175" x2="480" y2="175" />
+  <line class="line" x1="660" y1="175" x2="700" y2="175" />
+  <line class="line" x1="880" y1="175" x2="920" y2="175" />
 </svg>

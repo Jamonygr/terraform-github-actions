@@ -17,7 +17,7 @@
   <text class="sub" x="90" y="170">- No secrets to rotate</text>
   <text class="sub" x="90" y="190">- Azure AD federated credentials</text>
   <text class="sub" x="90" y="210">- Set USE_OIDC=true</text>
-  <text class="sub" x="90" y="230">- Use AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID</text>
+  <text class="sub" x="90" y="230">- Use AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID</text>
 
   <rect class="box" x="560" y="90" width="380" height="220" />
   <text class="label" x="590" y="125">Service Principal (Legacy)</text>

@@ -30,6 +30,7 @@
   <rect class="box" x="420" y="180" width="220" height="80" />
   <text class="label" x="440" y="215">Artifacts</text>
   <text class="sub" x="440" y="237">JSON, SARIF, SVG</text>
+  <text class="sub" x="440" y="255">SBOM, compliance report</text>
 
   <rect class="box" x="760" y="180" width="260" height="80" />
   <text class="label" x="780" y="215">Dashboards / Issues</text>

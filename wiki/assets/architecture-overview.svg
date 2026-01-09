@@ -41,7 +41,7 @@
 
   <rect class="box" x="740" y="210" width="200" height="70" />
   <text class="label" x="760" y="240">State Storage</text>
-  <text class="sub" x="760" y="262">tfstate + backups</text>
+  <text class="sub" x="760" y="262">tfstate + tfstate-backups</text>
 
   <line class="line" x1="220" y1="125" x2="260" y2="125" />
   <line class="line" x1="460" y1="125" x2="500" y2="125" />

@@ -13,7 +13,7 @@
     </style>
   </defs>
   <rect class="bg" x="0" y="0" width="1200" height="360" />
-  <text class="title" x="40" y="50">Drift Detection Loop</text>
+  <text class="title" x="40" y="50">Drift Detection Loop (refresh-only)</text>
 
   <rect class="box" x="40" y="140" width="180" height="60" />
   <text class="label" x="60" y="175">Schedule</text>

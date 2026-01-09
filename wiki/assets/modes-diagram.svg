@@ -18,6 +18,7 @@
   <rect class="box" x="40" y="120" width="220" height="90" />
   <text class="label" x="60" y="150">Router</text>
   <text class="sub" x="60" y="172">Mode: single / matrix / drift</text>
+  <text class="sub" x="60" y="190">Defaults: lab + ./test</text>
 
   <rect class="box" x="360" y="60" width="220" height="80" />
   <text class="label" x="380" y="90">Single</text>

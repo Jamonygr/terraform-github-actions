@@ -29,6 +29,7 @@
 
   <rect class="box" x="980" y="140" width="200" height="60" />
   <text class="label" x="1000" y="175">Auto Destroy</text>
+  <text class="sub" x="1000" y="195">on PR close</text>
 
   <line class="line" x1="220" y1="170" x2="260" y2="170" />
   <line class="line" x1="460" y1="170" x2="500" y2="170" />

@@ -31,7 +31,7 @@
   <rect class="box" x="920" y="140" width="180" height="60" />
   <text class="label" x="940" y="175">Apply</text>
 
-  <text class="note" x="270" y="225">soft or hard fail</text>
+  <text class="note" x="270" y="225">soft or hard fail (configurable)</text>
 
   <line class="line" x1="220" y1="170" x2="260" y2="170" />
   <line class="line" x1="440" y1="170" x2="480" y2="170" />

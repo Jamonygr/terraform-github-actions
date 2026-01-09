@@ -13,7 +13,7 @@
 
   <rect class="box" x="80" y="90" width="360" height="90" />
   <text class="label" x="100" y="125">Core Actions</text>
-  <text class="sub" x="100" y="150">setup, validate, plan, apply</text>
+  <text class="sub" x="100" y="150">setup, validate, plan, apply, destroy</text>
 
   <rect class="box" x="760" y="90" width="360" height="90" />
   <text class="label" x="780" y="125">Security Actions</text>
@@ -29,9 +29,10 @@
 
   <rect class="box" x="80" y="330" width="360" height="90" />
   <text class="label" x="100" y="365">Utilities</text>
-  <text class="sub" x="100" y="390">cost-estimate, terraform-docs, metrics, graph</text>
+  <text class="sub" x="100" y="390">cost-estimate, terraform-docs, metrics</text>
+  <text class="sub" x="100" y="408">graph, resource-inventory, version-check</text>
 
   <rect class="box" x="760" y="330" width="360" height="90" />
   <text class="label" x="780" y="365">Module Ops</text>
-  <text class="sub" x="780" y="390">module-version, changelog, inventory</text>
+  <text class="sub" x="780" y="390">module-version, changelog</text>
 </svg>

@@ -29,7 +29,7 @@
 
   <rect class="box" x="740" y="140" width="200" height="70" />
   <text class="label" x="760" y="170">Budget Gate</text>
-  <text class="sub" x="760" y="192">thresholds</text>
+  <text class="sub" x="760" y="192">optional thresholds</text>
 
   <rect class="box" x="980" y="140" width="200" height="70" />
   <text class="label" x="1000" y="170">Apply</text>

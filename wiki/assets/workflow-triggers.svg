@@ -25,7 +25,7 @@
 
   <rect class="box" x="520" y="80" width="180" height="60" />
   <text class="label" x="540" y="115">Dispatch</text>
-  <text class="sub" x="540" y="135">manual actions</text>
+  <text class="sub" x="540" y="135">mode/action inputs</text>
 
   <rect class="box" x="740" y="80" width="180" height="60" />
   <text class="label" x="760" y="115">Schedule</text>
@@ -37,11 +37,11 @@
 
   <rect class="box" x="200" y="310" width="200" height="60" />
   <text class="label" x="220" y="345">Single</text>
-  <text class="sub" x="220" y="365">one environment</text>
+  <text class="sub" x="220" y="365">single env (default lab)</text>
 
   <rect class="box" x="500" y="310" width="200" height="60" />
   <text class="label" x="520" y="345">Matrix</text>
-  <text class="sub" x="520" y="365">multi environment</text>
+  <text class="sub" x="520" y="365">dev/staging/prod</text>
 
   <rect class="box" x="800" y="310" width="200" height="60" />
   <text class="label" x="820" y="345">Drift</text>

@@ -21,7 +21,7 @@
 
   <rect class="box" x="280" y="150" width="640" height="55" />
   <text class="label" x="300" y="182">IaC Scan</text>
-  <text class="sub" x="300" y="200">tfsec, checkov, terrascan</text>
+  <text class="sub" x="300" y="200">tfsec, checkov, terrascan (optional)</text>
 
   <rect class="box" x="280" y="220" width="640" height="55" />
   <text class="label" x="300" y="252">Policy Check</text>
@@ -29,7 +29,7 @@
 
   <rect class="box" x="280" y="290" width="640" height="55" />
   <text class="label" x="300" y="322">Tag Audit</text>
-  <text class="sub" x="300" y="340">required tags</text>
+  <text class="sub" x="300" y="340">required tags (optional)</text>
 
   <rect class="box" x="280" y="360" width="640" height="55" />
   <text class="label" x="300" y="392">Approval Gate</text>
