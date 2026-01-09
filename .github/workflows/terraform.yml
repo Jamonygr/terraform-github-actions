@@ -120,7 +120,7 @@ permissions:
 env:
   TF_VERSION: ${{ inputs.terraform_version || vars.TF_VERSION || '1.9.0' }}
   ENVIRONMENT: ${{ inputs.environment || github.event.inputs.environment || 'lab' }}
-  WORKING_DIRECTORY: ${{ inputs.working_directory || github.event.inputs.working_directory || vars.TF_WORKING_DIRECTORY || '.' }}
+  WORKING_DIRECTORY: ${{ inputs.working_directory || github.event.inputs.working_directory || vars.TF_WORKING_DIRECTORY || './test' }}
   # Pipeline Mode Detection
   PIPELINE_MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}
   # OIDC Configuration (set USE_OIDC=true in repo variables to enable)
@@ -159,9 +159,9 @@ jobs:
         run: |
           MODE="${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}"
           echo "mode=$MODE" >> $GITHUB_OUTPUT
-          echo "is_drift=$([[ '$MODE' == 'drift' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
-          echo "is_matrix=$([[ '$MODE' == 'matrix' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
-          echo "is_single=$([[ '$MODE' == 'single' || '${{ github.event_name }}' == 'push' || '${{ github.event_name }}' == 'pull_request' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "is_drift=$([[ \"$MODE\" == 'drift' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "is_matrix=$([[ \"$MODE\" == 'matrix' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "is_single=$([[ \"$MODE\" == 'single' || '${{ github.event_name }}' == 'push' || '${{ github.event_name }}' == 'pull_request' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
           
           echo "## 🔀 Pipeline Mode: $MODE" >> $GITHUB_STEP_SUMMARY
           echo "- Event: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
