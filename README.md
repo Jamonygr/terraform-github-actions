@@ -276,7 +276,7 @@ The unified workflow (`terraform.yml`) supports single, matrix, and drift modes.
 | 5 | Analysis | Graph + module versions | Always on |
 | 6 | Cost and versions | Infracost + provider checks | Cost is single mode only |
 | 7 | `plan` | Plan + PR comment + blast radius | Single mode only |
-| 8 | `apply` | Apply in single mode | Auto on push when `AUTO_APPLY=true`; environment gates still apply |
+| 8 | `apply` | Apply in single mode | Auto on push unless `AUTO_APPLY=false`; environment gates still apply |
 | 9 | `destroy` | Manual destroy + confirm | Environment gates |
 | 10 | `metrics` | Post-apply reporting | Single mode only |
 
@@ -319,7 +319,7 @@ env:
 | `DOCS_ENFORCE` | Enforce terraform-docs check (fail on diff) |
 | `ENABLE_TERRASCAN` | Enable Terrascan security scan |
 | `TERRASCAN_VERSION` | Override Terrascan version (default `1.18.3`) |
-| `AUTO_APPLY` | Auto-apply on push when `true` (set to `false` to keep apply manual) |
+| `AUTO_APPLY` | Auto-apply on push unless set to `false` |
 | `REQUIRED_TAG_KEYS` | Comma-separated required tag keys for tag audit |
 | `FAIL_ON_TAG_AUDIT` | Fail pipeline when tag audit finds missing tags |
 | `ENABLE_CANARY` | Enable canary apply before prod |

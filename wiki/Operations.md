@@ -4,7 +4,7 @@ This page covers apply/destroy flows, backups, notifications, and audit logging.
 
 ## Apply
 
-- Apply runs on manual dispatch or on push when `AUTO_APPLY=true`.
+- Apply runs on manual dispatch or on push unless `AUTO_APPLY=false`.
 - Environment protection rules can enforce approvals.
 - Optional canary apply runs first when enabled.
 

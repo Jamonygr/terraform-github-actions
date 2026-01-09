@@ -141,8 +141,6 @@ env:
   WORKING_DIRECTORY: ${{ inputs.working_directory || github.event.inputs.working_directory || vars.TF_WORKING_DIRECTORY || './test' }}
   # Pipeline Mode Detection
   PIPELINE_MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}
-  # Auto-apply on push (set AUTO_APPLY=false in repo variables to disable)
-  AUTO_APPLY: ${{ vars.AUTO_APPLY || 'true' }}
   # OIDC Configuration (set USE_OIDC=true in repo variables to enable)
   USE_OIDC: ${{ vars.USE_OIDC || 'false' }}
   AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -1550,7 +1548,7 @@ jobs:
       needs.router.outputs.mode == 'single' &&
       (
         (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply') ||
-        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+        (github.event_name == 'push' && vars.AUTO_APPLY != 'false')
       )
     steps:
       - uses: actions/checkout@v4
@@ -1653,7 +1651,7 @@ jobs:
       needs.router.outputs.mode != 'matrix' &&
       (
         (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply') ||
-        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+        (github.event_name == 'push' && vars.AUTO_APPLY != 'false')
       )
     environment: ${{ inputs.environment || github.event.inputs.environment || 'lab' }}
     outputs:
@@ -2769,7 +2767,7 @@ jobs:
           (github.event_name == 'workflow_dispatch' &&
             github.event.inputs.action == 'apply' &&
             contains(github.event.inputs.environments, 'dev')) ||
-          (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+          (github.event_name == 'push' && vars.AUTO_APPLY != 'false')
         )
     environment: dev
     steps:
@@ -2809,7 +2807,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' &&
           github.event.inputs.action == 'apply' &&
           contains(github.event.inputs.environments, 'staging')) ||
-        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+        (github.event_name == 'push' && vars.AUTO_APPLY != 'false')
       )
     environment: staging
     steps:
@@ -2849,7 +2847,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' &&
           github.event.inputs.action == 'apply' &&
           contains(github.event.inputs.environments, 'prod')) ||
-        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+        (github.event_name == 'push' && vars.AUTO_APPLY != 'false')
       )
     environment: prod
     steps:
