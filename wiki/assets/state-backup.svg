@@ -17,7 +17,7 @@
 
   <rect class="box" x="120" y="110" width="220" height="70" />
   <text class="label" x="140" y="140">Apply / Destroy</text>
-  <text class="sub" x="140" y="162">manual action</text>
+  <text class="sub" x="140" y="162">auto or manual</text>
 
   <rect class="box" x="440" y="110" width="220" height="70" />
   <text class="label" x="460" y="140">State Backup</text>

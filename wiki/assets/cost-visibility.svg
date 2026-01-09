@@ -33,7 +33,7 @@
 
   <rect class="box" x="980" y="140" width="200" height="70" />
   <text class="label" x="1000" y="170">Apply</text>
-  <text class="sub" x="1000" y="192">manual action</text>
+  <text class="sub" x="1000" y="192">auto or manual</text>
 
   <line class="line" x1="220" y1="175" x2="260" y2="175" />
   <line class="line" x1="460" y1="175" x2="500" y2="175" />

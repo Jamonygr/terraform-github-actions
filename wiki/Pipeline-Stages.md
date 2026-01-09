@@ -35,7 +35,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 6 | `cost-estimate` | Infracost summary (single mode only) |
 | 6 | `version-check` | Terraform/provider update checks |
 | 7 | `plan` | Terraform plan output and PR comment (single mode only) |
-| 8 | `apply` | Apply in single mode (manual) |
+| 8 | `apply` | Apply in single mode (auto on push when `AUTO_APPLY=true`) |
 | 9 | `destroy` | Destroy in single mode (manual) |
 | 10 | `metrics` | Post-apply metrics and audit summary (single mode only) |
 | 11 | `compliance-report` | Compliance report after successful apply |
@@ -67,7 +67,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 ## Why stages are skipped
 
 - Mode-specific jobs only run in their mode (single vs matrix vs drift).
-- Apply/destroy jobs run only on manual dispatch with `action=apply` or `action=destroy`.
+- Apply runs on manual dispatch or on push when `AUTO_APPLY=true`; destroy remains manual with `action=destroy`.
 - PR-only jobs run only on pull requests (integration tests, ephemeral env).
 - Optional jobs require their enable variables to be set.
 
@@ -88,7 +88,7 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 
 ## Apply and destroy gates
 
-- `apply` requires manual dispatch with `action: apply`.
+- `apply` runs on manual dispatch with `action: apply` or on push when `AUTO_APPLY=true`.
 - `destroy` requires manual dispatch with `action: destroy` and `destroy_confirm: DESTROY`.
 - Environment protection rules can add approvals.
 - Change freeze windows are enforced if `ENABLE_FREEZE_WINDOW=true`.

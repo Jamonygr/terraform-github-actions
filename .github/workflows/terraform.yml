@@ -141,6 +141,8 @@ env:
   WORKING_DIRECTORY: ${{ inputs.working_directory || github.event.inputs.working_directory || vars.TF_WORKING_DIRECTORY || './test' }}
   # Pipeline Mode Detection
   PIPELINE_MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'drift') || 'single' }}
+  # Auto-apply on push (set AUTO_APPLY=false in repo variables to disable)
+  AUTO_APPLY: ${{ vars.AUTO_APPLY || 'true' }}
   # OIDC Configuration (set USE_OIDC=true in repo variables to enable)
   USE_OIDC: ${{ vars.USE_OIDC || 'false' }}
   AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -1546,8 +1548,10 @@ jobs:
     needs: [router, plan]
     if: |
       needs.router.outputs.mode == 'single' &&
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.action == 'apply'
+      (
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply') ||
+        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+      )
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1647,8 +1651,10 @@ jobs:
       needs.canary.result != 'failure' &&
       needs.router.outputs.mode != 'drift' &&
       needs.router.outputs.mode != 'matrix' &&
-      github.event_name == 'workflow_dispatch' && 
-      github.event.inputs.action == 'apply'
+      (
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply') ||
+        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+      )
     environment: ${{ inputs.environment || github.event.inputs.environment || 'lab' }}
     outputs:
       start_time: ${{ steps.timer.outputs.start }}
@@ -2759,8 +2765,12 @@ jobs:
     needs: [router, matrix-plan]
     if: |
       needs.router.outputs.is_matrix == 'true' &&
-      github.event.inputs.action == 'apply' && 
-      contains(github.event.inputs.environments, 'dev')
+        (
+          (github.event_name == 'workflow_dispatch' &&
+            github.event.inputs.action == 'apply' &&
+            contains(github.event.inputs.environments, 'dev')) ||
+          (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+        )
     environment: dev
     steps:
       - uses: actions/checkout@v4
@@ -2795,8 +2805,12 @@ jobs:
       always() &&
       needs.router.outputs.is_matrix == 'true' &&
       (needs.matrix-apply-dev.result == 'success' || needs.matrix-apply-dev.result == 'skipped') &&
-      github.event.inputs.action == 'apply' && 
-      contains(github.event.inputs.environments, 'staging')
+      (
+        (github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.action == 'apply' &&
+          contains(github.event.inputs.environments, 'staging')) ||
+        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+      )
     environment: staging
     steps:
       - uses: actions/checkout@v4
@@ -2831,8 +2845,12 @@ jobs:
       always() &&
       needs.router.outputs.is_matrix == 'true' &&
       (needs.matrix-apply-staging.result == 'success' || needs.matrix-apply-staging.result == 'skipped') &&
-      github.event.inputs.action == 'apply' && 
-      contains(github.event.inputs.environments, 'prod')
+      (
+        (github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.action == 'apply' &&
+          contains(github.event.inputs.environments, 'prod')) ||
+        (github.event_name == 'push' && env.AUTO_APPLY == 'true')
+      )
     environment: prod
     steps:
       - uses: actions/checkout@v4
