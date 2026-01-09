@@ -1751,7 +1751,7 @@ jobs:
           echo "Or run manually:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "# List available backups" >> $GITHUB_STEP_SUMMARY
-          echo "az storage blob list --account-name ${{ secrets.TF_STATE_SA }} --container-name tfstate-backup --query \"[?contains(name,'${{ env.ENVIRONMENT }}')].name\" -o tsv" >> $GITHUB_STEP_SUMMARY
+          echo "az storage blob list --account-name ${{ secrets.TF_STATE_SA }} --container-name tfstate-backups --query \"[?contains(name,'${{ env.ENVIRONMENT }}')].name\" -o tsv" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "::warning::Apply failed - manual rollback may be required. State backup is available."
 
