@@ -98,10 +98,9 @@ runs:
       with:
         path: |
           ~/.terraform.d/plugin-cache
-          ${{ inputs.working_directory }}/.terraform
-        key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+        key: terraform-plugins-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
         restore-keys: |
-          terraform-${{ runner.os }}-
+          terraform-plugins-${{ runner.os }}-
 
     - name: Azure Login (OIDC)
       if: inputs.use_oidc == 'true'
@@ -177,6 +176,7 @@ runs:
           -backend-config="storage_account_name=${{ inputs.backend_storage_account }}" \
           -backend-config="container_name=${{ inputs.backend_container }}" \
           -backend-config="key=${{ inputs.state_key }}" \
+          -reconfigure \
           -lock-timeout=${{ inputs.lock_timeout }}
 
     - name: Download Plan
