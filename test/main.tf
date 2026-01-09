@@ -37,7 +37,7 @@ provider "azurerm" {
 # =============================================================================
 
 resource "azurerm_resource_group" "test" {
-  name     = "rg-${var.project}-${var.environment}-${var.location_short}"
+  name     = "rg1-${var.project}-${var.environment}-${var.location_short}"
   location = var.location
 
   tags = {
