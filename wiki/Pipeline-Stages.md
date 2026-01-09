@@ -48,10 +48,21 @@ This page describes the stages in the unified pipeline (`.github/workflows/terra
 | 2 | `module-contracts` | `ENABLE_MODULE_CONTRACTS=true` | Checks module docs and variable descriptions |
 | 3 | `security-terrascan` | `ENABLE_TERRASCAN=true` | Terrascan SARIF upload |
 | 4 | `docs-check` | `DOCS_ENFORCE=true` | Fails if terraform-docs output changed |
+| 4e | `azure-policy-check` | `ENABLE_AZURE_POLICY_CHECK=true` | Azure Policy compliance pre-check |
+| 5b | `blast-radius` | `ENABLE_BLAST_RADIUS=true` | Visual blast radius analysis |
+| 5c | `resource-dependency-map` | `ENABLE_DEPENDENCY_MAP=true` | Resource dependency mapping |
 | 7 | `tag-audit` | `REQUIRED_TAG_KEYS` set | Verifies required tag keys in plan |
 | 7 | `integration-tests` | PR only | Terratest execution (soft fail) |
 | 7 | `canary` | `ENABLE_CANARY=true` and prod target | Canary apply before prod apply |
 | 7 | `ephemeral-env` | `ENABLE_EPHEMERAL_ENV=true` | PR-only ephemeral apply + destroy |
+| 7e | `dependency-health-check` | `ENABLE_DEPENDENCY_CHECK=true` | External dependency health verification |
+| 7f | `quota-validation` | `ENABLE_QUOTA_CHECK=true` | Azure quota validation before deploy |
+| 10a | `health-check` | `ENABLE_HEALTH_CHECK=true` | Post-deployment health probes |
+| 10b | `e2e-tests` | `ENABLE_E2E_TESTS=true` | E2E smoke tests after apply |
+| 10c | `performance-baseline` | `ENABLE_PERFORMANCE_BASELINE=true` | Capture performance metrics |
+| 11 | `compliance-report` | Always (after apply) | Generates compliance documentation |
+| 11a | `sbom` | `ENABLE_SBOM=true` | Software Bill of Materials generation |
+| 12 | `auto-rollback` | `ENABLE_AUTO_ROLLBACK=true` | Auto-rollback on health check failure |
 
 ## Mode-specific stages
 

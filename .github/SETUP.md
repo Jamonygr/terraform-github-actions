@@ -321,6 +321,26 @@ az role assignment create \
 | `ENABLE_REPO_HYGIENE` | Enable repo hygiene checks (branch protection) |
 | `FAIL_ON_REPO_HYGIENE` | Fail pipeline if hygiene checks fail |
 
+### Extended Pipeline Variables (New Stages)
+
+| Variable Name | Description | Default |
+|--------------|-------------|---------|
+| `ENABLE_AZURE_POLICY_CHECK` | Enable Azure Policy compliance pre-check | `false` |
+| `POLICY_COMPLIANCE_THRESHOLD` | Max non-compliant resources before warning | `10` |
+| `FAIL_ON_POLICY_CHECK` | Fail pipeline if policy check exceeds threshold | `false` |
+| `ENABLE_BLAST_RADIUS` | Enable blast radius visualization stage | `false` |
+| `ENABLE_DEPENDENCY_MAP` | Enable resource dependency mapping | `false` |
+| `ENABLE_DEPENDENCY_CHECK` | Enable external dependency health checks | `false` |
+| `FAIL_ON_DEPENDENCY_CHECK` | Fail pipeline if dependency checks fail | `false` |
+| `ENABLE_QUOTA_CHECK` | Enable Azure quota validation before deploy | `false` |
+| `AZURE_LOCATION` | Azure location for quota checks | `eastus2` |
+| `QUOTA_WARNING_THRESHOLD` | Quota usage % to trigger warning | `80` |
+| `ENABLE_HEALTH_CHECK` | Enable post-deployment health probes | `false` |
+| `ENABLE_E2E_TESTS` | Enable E2E smoke tests after apply | `false` |
+| `ENABLE_PERFORMANCE_BASELINE` | Capture performance metrics after deploy | `false` |
+| `ENABLE_SBOM` | Generate Software Bill of Materials | `false` |
+| `ENABLE_AUTO_ROLLBACK` | Auto-rollback on health check failure | `false` |
+
 ---
 
 ## Step 5: Create GitHub Environments
@@ -337,6 +357,8 @@ Environments add approval gates and protection rules.
 | `prod` | Required: 1+ reviewer, wait 5 min | |
 | `dev-destroy` | Required: 1 reviewer | |
 | `prod-destroy` | Required: 2 reviewers | |
+| `dev-rollback` | Required: 1 reviewer | For auto-rollback |
+| `prod-rollback` | Required: 2 reviewers | For auto-rollback |
 
 ### Environment-Specific Secrets
 

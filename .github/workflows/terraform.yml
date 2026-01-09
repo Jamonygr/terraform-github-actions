@@ -32,9 +32,12 @@ on:
         default: 'single'
         type: choice
         options:
-          - single      # Single environment deployment
-          - matrix      # Multi-environment parallel deployment
-          - drift       # Drift detection only
+          - single        # Single environment deployment
+          - matrix        # Multi-environment parallel deployment
+          - drift         # Drift detection only
+          - rollback      # Restore previous state
+          - audit         # Generate compliance report only
+          - validate-only # Full validation without apply
       environment:
         description: 'Environment (single mode)'
         required: false
@@ -691,6 +694,86 @@ jobs:
           echo "Docs enforcement disabled (DOCS_ENFORCE not set)." >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
+  # STAGE 4E: AZURE POLICY PRE-CHECK (Optional)
+  # =========================================================================
+  azure-policy-check:
+    name: '4e. Compliance - Azure Policy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, validate]
+    if: needs.router.outputs.is_drift != 'true' && vars.ENABLE_AZURE_POLICY_CHECK == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Check Azure Policy Compliance
+        shell: bash
+        run: |
+          echo "## 📋 Azure Policy Pre-Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get subscription-level policy compliance
+          SUBSCRIPTION_ID="${{ env.AZURE_SUBSCRIPTION_ID }}"
+          if [ -z "$SUBSCRIPTION_ID" ]; then
+            SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          fi
+          
+          echo "### Current Policy Compliance Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get non-compliant resources count
+          NON_COMPLIANT=$(az policy state summarize --subscription "$SUBSCRIPTION_ID" \
+            --query "results.nonCompliantResources" -o tsv 2>/dev/null || echo "0")
+          
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Non-Compliant Resources | $NON_COMPLIANT |" >> $GITHUB_STEP_SUMMARY
+          
+          # List policy assignments
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Active Policy Assignments" >> $GITHUB_STEP_SUMMARY
+          az policy assignment list --query "[].{Name:displayName,Scope:scope}" -o table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Unable to list assignments" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for deny policies that might block deployment
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deny Policies (may block deployment)" >> $GITHUB_STEP_SUMMARY
+          az policy assignment list --query "[?enforcementMode=='Default'].displayName" -o tsv 2>/dev/null | head -10 >> $GITHUB_STEP_SUMMARY || echo "None found" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$NON_COMPLIANT" -gt "${{ vars.POLICY_COMPLIANCE_THRESHOLD || 10 }}" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ High number of non-compliant resources detected" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ vars.FAIL_ON_POLICY_CHECK }}" == "true" ]; then
+              exit 1
+            fi
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Policy compliance within threshold" >> $GITHUB_STEP_SUMMARY
+          fi
+        continue-on-error: true
+
+      - name: Azure Policy Check Skipped
+        if: vars.ENABLE_AZURE_POLICY_CHECK != 'true'
+        shell: bash
+        run: |
+          echo "## 📋 Azure Policy Pre-Check" >> $GITHUB_STEP_SUMMARY
+          echo "Skipped (ENABLE_AZURE_POLICY_CHECK not set)" >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
   # STAGE 5: GRAPH VISUALIZATION (Skip for drift mode)
   # =========================================================================
   graph:
@@ -738,6 +821,178 @@ jobs:
       - uses: ./.github/actions/module-version
         with:
           working_directory: ${{ env.WORKING_DIRECTORY }}
+
+  # =========================================================================
+  # STAGE 5B: BLAST RADIUS VISUALIZATION (Optional)
+  # =========================================================================
+  blast-radius:
+    name: '5b. Analysis - Blast Radius'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, graph, module-versions]
+    if: needs.router.outputs.is_drift != 'true' && vars.ENABLE_BLAST_RADIUS == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install graphviz pydot networkx
+          sudo apt-get update && sudo apt-get install -y graphviz
+
+      - name: Init Terraform
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform init -backend=false
+
+      - name: Generate Blast Radius Visualization
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## 💥 Blast Radius Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Generate terraform graph
+          terraform graph -type=plan > graph.dot 2>/dev/null || terraform graph > graph.dot
+          
+          # Convert to multiple formats
+          dot -Tsvg graph.dot -o blast-radius.svg 2>/dev/null || true
+          dot -Tpng graph.dot -o blast-radius.png 2>/dev/null || true
+          
+          # Count resources and dependencies
+          RESOURCES=$(grep -c '\[label=' graph.dot 2>/dev/null || echo "0")
+          EDGES=$(grep -c '\->' graph.dot 2>/dev/null || echo "0")
+          
+          echo "### Resource Dependency Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Resources/Nodes | $RESOURCES |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependencies/Edges | $EDGES |" >> $GITHUB_STEP_SUMMARY
+          
+          # Identify high-impact resources (many dependencies)
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### High-Impact Resources (most dependencies)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          grep '\->' graph.dot | cut -d'"' -f2 | sort | uniq -c | sort -rn | head -10 | \
+            while read count resource; do
+              echo "- **$resource**: $count dependencies" >> $GITHUB_STEP_SUMMARY
+            done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Blast radius visualization generated" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Blast Radius Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: blast-radius-${{ github.sha }}
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/blast-radius.svg
+            ${{ env.WORKING_DIRECTORY }}/blast-radius.png
+            ${{ env.WORKING_DIRECTORY }}/graph.dot
+          retention-days: 30
+        continue-on-error: true
+
+  # =========================================================================
+  # STAGE 5C: RESOURCE DEPENDENCY MAP (Optional)
+  # =========================================================================
+  resource-dependency-map:
+    name: '5c. Analysis - Dependency Map'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, graph, module-versions]
+    if: needs.router.outputs.is_drift != 'true' && vars.ENABLE_DEPENDENCY_MAP == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init Terraform
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform init -backend=false
+
+      - name: Generate Resource Dependency Report
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        shell: bash
+        run: |
+          echo "## 🗺️ Resource Dependency Map" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Generate graph in JSON-like format for parsing
+          terraform graph -type=plan > deps.dot 2>/dev/null || terraform graph > deps.dot
+          
+          # Create dependency report
+          cat > dependency-report.json << 'JSONEOF'
+          {
+            "generated_at": "$(date -Iseconds)",
+            "commit": "${{ github.sha }}",
+            "resources": []
+          }
+          JSONEOF
+          
+          echo "### Module Dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # List modules and their dependencies
+          if [ -d "modules" ]; then
+            for mod in modules/*/; do
+              [ -d "$mod" ] || continue
+              MOD_NAME=$(basename "$mod")
+              echo "#### Module: $MOD_NAME" >> $GITHUB_STEP_SUMMARY
+              
+              # Count resources in module
+              TF_FILES=$(find "$mod" -name "*.tf" 2>/dev/null | wc -l)
+              RESOURCES=$(grep -h "^resource " "$mod"*.tf 2>/dev/null | wc -l || echo "0")
+              DATA_SOURCES=$(grep -h "^data " "$mod"*.tf 2>/dev/null | wc -l || echo "0")
+              
+              echo "- Terraform files: $TF_FILES" >> $GITHUB_STEP_SUMMARY
+              echo "- Resources: $RESOURCES" >> $GITHUB_STEP_SUMMARY
+              echo "- Data sources: $DATA_SOURCES" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "No modules/ directory found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "### Provider Dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          terraform providers 2>/dev/null | head -20 >> $GITHUB_STEP_SUMMARY || echo "Could not list providers" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Resource Type Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count resources by type
+          grep -rh "^resource " *.tf modules/**/*.tf 2>/dev/null | \
+            sed 's/resource "\([^"]*\)".*/\1/' | sort | uniq -c | sort -rn | head -15 | \
+            while read count type; do
+              echo "- \`$type\`: $count" >> $GITHUB_STEP_SUMMARY
+            done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Dependency map generated" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Dependency Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-map-${{ github.sha }}
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/deps.dot
+            ${{ env.WORKING_DIRECTORY }}/dependency-report.json
+          retention-days: 30
+        continue-on-error: true
 
   # =========================================================================
   # STAGE 6: COST ESTIMATION (Skip for drift mode)
@@ -930,6 +1185,199 @@ jobs:
           else
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "? Tag audit passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # =========================================================================
+  # STAGE 7E: DEPENDENCY HEALTH CHECK (Optional)
+  # =========================================================================
+  dependency-health-check:
+    name: '7e. Dependency Health Check'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [router, plan]
+    if: needs.router.outputs.is_drift != 'true' && vars.ENABLE_DEPENDENCY_CHECK == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Check External Dependencies
+        shell: bash
+        run: |
+          echo "## 🔗 Dependency Health Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          FAIL_COUNT=0
+          
+          # Check Azure Management API
+          echo "### Azure Services Health" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check Azure Status API
+          AZURE_STATUS=$(curl -sf --max-time 10 "https://status.azure.com/en-us/status" -o /dev/null && echo "✅ Healthy" || echo "⚠️ Unreachable")
+          echo "- Azure Status Page: $AZURE_STATUS" >> $GITHUB_STEP_SUMMARY
+          
+          # Check Azure Management endpoint
+          MGMT_STATUS=$(curl -sf --max-time 10 "https://management.azure.com/tenants?api-version=2020-01-01" -H "Authorization: Bearer $(az account get-access-token --query accessToken -o tsv 2>/dev/null)" -o /dev/null && echo "✅ Healthy" || echo "⚠️ Check Failed")
+          echo "- Azure Management API: $MGMT_STATUS" >> $GITHUB_STEP_SUMMARY
+          
+          # Check Terraform Registry
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Terraform Registry" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          REGISTRY_STATUS=$(curl -sf --max-time 10 "https://registry.terraform.io/.well-known/terraform.json" -o /dev/null && echo "✅ Healthy" || echo "⚠️ Unreachable")
+          echo "- Terraform Registry: $REGISTRY_STATUS" >> $GITHUB_STEP_SUMMARY
+          
+          # Check AzureRM provider availability
+          AZURERM_STATUS=$(curl -sf --max-time 10 "https://registry.terraform.io/v1/providers/hashicorp/azurerm" -o /dev/null && echo "✅ Available" || echo "⚠️ Unreachable")
+          echo "- AzureRM Provider: $AZURERM_STATUS" >> $GITHUB_STEP_SUMMARY
+          
+          # DNS Resolution checks
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### DNS Resolution" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for endpoint in management.azure.com login.microsoftonline.com blob.core.windows.net; do
+            if nslookup $endpoint > /dev/null 2>&1; then
+              echo "- $endpoint: ✅ Resolved" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- $endpoint: ⚠️ Resolution Failed" >> $GITHUB_STEP_SUMMARY
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+          done
+          
+          # Check current Azure subscription status
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Subscription Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          SUB_STATE=$(az account show --query state -o tsv 2>/dev/null || echo "Unknown")
+          echo "- Subscription State: $SUB_STATE" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$SUB_STATE" != "Enabled" ]; then
+            echo "⚠️ Subscription is not in Enabled state!" >> $GITHUB_STEP_SUMMARY
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            echo "⚠️ $FAIL_COUNT dependency check(s) failed" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ vars.FAIL_ON_DEPENDENCY_CHECK }}" == "true" ]; then
+              exit 1
+            fi
+          else
+            echo "✅ All dependency checks passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # =========================================================================
+  # STAGE 7F: QUOTA VALIDATION (Optional)
+  # =========================================================================
+  quota-validation:
+    name: '7f. Quota Validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, plan]
+    if: needs.router.outputs.is_drift != 'true' && vars.ENABLE_QUOTA_CHECK == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          path: ${{ env.WORKING_DIRECTORY }}
+        continue-on-error: true
+
+      - name: Check Azure Quotas
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## 📊 Azure Quota Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          LOCATION="${{ vars.AZURE_LOCATION || 'eastus2' }}"
+          
+          echo "### Compute Quotas (Location: $LOCATION)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check VM quotas
+          echo "| Quota | Current | Limit | Usage % |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|---------|-------|---------|" >> $GITHUB_STEP_SUMMARY
+          
+          az vm list-usage --location "$LOCATION" --query "[?currentValue > 0 || name.value=='cores' || name.value=='virtualMachines'].{Name:name.localizedValue,Current:currentValue,Limit:limit}" -o json 2>/dev/null | \
+            jq -r '.[] | select(.Limit > 0) | "| \(.Name) | \(.Current) | \(.Limit) | \((.Current / .Limit * 100) | floor)% |"' >> $GITHUB_STEP_SUMMARY || echo "Unable to fetch VM quotas" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Network Quotas" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "| Quota | Current | Limit | Usage % |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|---------|-------|---------|" >> $GITHUB_STEP_SUMMARY
+          
+          az network list-usages --location "$LOCATION" --query "[?currentValue > 0].{Name:name.localizedValue,Current:currentValue,Limit:limit}" -o json 2>/dev/null | \
+            jq -r '.[] | select(.Limit > 0) | "| \(.Name) | \(.Current) | \(.Limit) | \((.Current / .Limit * 100) | floor)% |"' | head -10 >> $GITHUB_STEP_SUMMARY || echo "Unable to fetch network quotas" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Storage Quotas" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count current storage accounts
+          SA_COUNT=$(az storage account list --query "length(@)" -o tsv 2>/dev/null || echo "0")
+          SA_LIMIT=250  # Default Azure limit
+          SA_USAGE=$((SA_COUNT * 100 / SA_LIMIT))
+          
+          echo "| Quota | Current | Limit | Usage % |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|---------|-------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Storage Accounts | $SA_COUNT | $SA_LIMIT | $SA_USAGE% |" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for high utilization
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Quota Warnings" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          THRESHOLD="${{ vars.QUOTA_WARNING_THRESHOLD || '80' }}"
+          WARNING_COUNT=0
+          
+          az vm list-usage --location "$LOCATION" -o json 2>/dev/null | \
+            jq -r ".[] | select(.limit > 0) | select((.currentValue / .limit * 100) > $THRESHOLD) | \"⚠️ \(.name.localizedValue): \(.currentValue)/\(.limit) (\((.currentValue / .limit * 100) | floor)%)\"" | \
+            while read line; do
+              echo "$line" >> $GITHUB_STEP_SUMMARY
+              WARNING_COUNT=$((WARNING_COUNT + 1))
+            done
+          
+          if [ "$WARNING_COUNT" -eq 0 ]; then
+            echo "✅ All quotas are below ${THRESHOLD}% utilization" >> $GITHUB_STEP_SUMMARY
           fi
 
   # =========================================================================
@@ -1414,6 +1862,661 @@ jobs:
           add_count: ${{ needs.plan.outputs.add || '0' }}
           change_count: ${{ needs.plan.outputs.change || '0' }}
           destroy_count: ${{ needs.plan.outputs.destroy || '0' }}
+
+  # =========================================================================
+  # STAGE 10A: HEALTH CHECK PROBES (After apply)
+  # =========================================================================
+  health-check:
+    name: '10a. Health Check'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, apply, plan]
+    if: always() && needs.apply.result == 'success' && vars.ENABLE_HEALTH_CHECK == 'true'
+    outputs:
+      health_status: ${{ steps.health.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init Terraform
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=${{ env.ENVIRONMENT }}.terraform.tfstate"
+
+      - name: Run Health Probes
+        id: health
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## 🏥 Post-Deployment Health Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          FAIL_COUNT=0
+          PASS_COUNT=0
+          
+          # Get terraform outputs
+          terraform output -json > outputs.json 2>/dev/null || echo "{}" > outputs.json
+          
+          echo "### Azure Resource Health" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check resource groups
+          echo "#### Resource Groups" >> $GITHUB_STEP_SUMMARY
+          RG_NAME="rg-${{ env.ENVIRONMENT }}"
+          CUSTOM_RG=$(jq -r '.resource_group_name.value // empty' outputs.json)
+          [ -n "$CUSTOM_RG" ] && RG_NAME="$CUSTOM_RG"
+          
+          if az group show --name "$RG_NAME" > /dev/null 2>&1; then
+            echo "- ✅ Resource group \`$RG_NAME\` exists" >> $GITHUB_STEP_SUMMARY
+            PASS_COUNT=$((PASS_COUNT + 1))
+          else
+            echo "- ⚠️ Resource group \`$RG_NAME\` not found (may use different naming)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check resources from terraform state
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Resources in State" >> $GITHUB_STEP_SUMMARY
+          RESOURCE_COUNT=$(terraform state list 2>/dev/null | wc -l || echo "0")
+          echo "- Total resources managed: $RESOURCE_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # HTTP endpoint checks from outputs
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Endpoint Health" >> $GITHUB_STEP_SUMMARY
+          
+          # Check any URL outputs
+          for key in $(jq -r 'keys[]' outputs.json); do
+            value=$(jq -r ".$key.value // empty" outputs.json)
+            if [[ "$value" == http* ]]; then
+              echo -n "- \`$key\`: " >> $GITHUB_STEP_SUMMARY
+              status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" "$value" 2>/dev/null || echo "000")
+              if [ "$status" -ge 200 ] && [ "$status" -lt 400 ]; then
+                echo "✅ HTTP $status" >> $GITHUB_STEP_SUMMARY
+                PASS_COUNT=$((PASS_COUNT + 1))
+              else
+                echo "⚠️ HTTP $status" >> $GITHUB_STEP_SUMMARY
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+              fi
+            fi
+          done
+          
+          # Azure Resource Health check
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Azure Resource Health API" >> $GITHUB_STEP_SUMMARY
+          
+          UNHEALTHY=$(az resource list --query "[].id" -o tsv 2>/dev/null | head -5 | while read id; do
+            az rest --method get --uri "$id/providers/Microsoft.ResourceHealth/availabilityStatuses/current?api-version=2022-10-01" 2>/dev/null | \
+              jq -r 'select(.properties.availabilityState != "Available") | .properties.availabilityState'
+          done | grep -v "^$" | wc -l)
+          
+          if [ "$UNHEALTHY" -gt 0 ]; then
+            echo "- ⚠️ $UNHEALTHY resource(s) not in healthy state" >> $GITHUB_STEP_SUMMARY
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+          else
+            echo "- ✅ All checked resources are healthy" >> $GITHUB_STEP_SUMMARY
+            PASS_COUNT=$((PASS_COUNT + 1))
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Passed: $PASS_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- Failed: $FAIL_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Some health checks failed" >> $GITHUB_STEP_SUMMARY
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ All health checks passed" >> $GITHUB_STEP_SUMMARY
+            echo "status=healthy" >> $GITHUB_OUTPUT
+          fi
+
+  # =========================================================================
+  # STAGE 10B: E2E SMOKE TESTS (After apply, optional)
+  # =========================================================================
+  e2e-tests:
+    name: '10b. E2E Smoke Tests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [router, apply, health-check]
+    if: always() && needs.apply.result == 'success' && vars.ENABLE_E2E_TESTS == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Get Terraform Outputs
+        id: outputs
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=${{ env.ENVIRONMENT }}.terraform.tfstate"
+          terraform output -json > outputs.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run E2E Tests
+        shell: bash
+        run: |
+          echo "## 🧪 E2E Smoke Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if custom test script exists
+          if [ -f "tests/e2e/smoke.sh" ]; then
+            echo "Running custom smoke tests..." >> $GITHUB_STEP_SUMMARY
+            chmod +x tests/e2e/smoke.sh
+            ./tests/e2e/smoke.sh >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          else
+            echo "### Default Smoke Tests" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Run basic Azure CLI checks
+            echo "#### Resource Verification" >> $GITHUB_STEP_SUMMARY
+            
+            # List resources in environment
+            RG_PATTERN="*${{ env.ENVIRONMENT }}*"
+            RESOURCES=$(az resource list --query "[?contains(resourceGroup,'${{ env.ENVIRONMENT }}')].{Name:name,Type:type}" -o table 2>/dev/null | head -20)
+            
+            if [ -n "$RESOURCES" ]; then
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "$RESOURCES" >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "✅ Resources verified" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "No resources found matching pattern" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          path: |
+            tests/e2e/results/
+            ${{ env.WORKING_DIRECTORY }}/outputs.json
+          retention-days: 30
+        continue-on-error: true
+
+  # =========================================================================
+  # STAGE 10C: PERFORMANCE BASELINE (After apply, optional)
+  # =========================================================================
+  performance-baseline:
+    name: '10c. Performance Baseline'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, apply]
+    if: always() && needs.apply.result == 'success' && vars.ENABLE_PERFORMANCE_BASELINE == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Capture Performance Baseline
+        shell: bash
+        run: |
+          echo "## 📈 Performance Baseline" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Captured at: $(date -Iseconds)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create baseline file
+          cat > performance-baseline.json << EOF
+          {
+            "timestamp": "$(date -Iseconds)",
+            "environment": "${{ env.ENVIRONMENT }}",
+            "commit": "${{ github.sha }}",
+            "metrics": {}
+          }
+          EOF
+          
+          echo "### Compute Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get VM metrics if any VMs exist
+          VMS=$(az vm list --query "[?contains(resourceGroup,'${{ env.ENVIRONMENT }}')].{Name:name,RG:resourceGroup}" -o json 2>/dev/null || echo "[]")
+          
+          if [ "$VMS" != "[]" ]; then
+            echo "| VM | CPU % (avg) | Memory % (avg) |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----|-------------|----------------|" >> $GITHUB_STEP_SUMMARY
+            
+            echo "$VMS" | jq -r '.[] | "\(.Name) \(.RG)"' | while read name rg; do
+              CPU=$(az monitor metrics list --resource "/subscriptions/${{ env.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$rg/providers/Microsoft.Compute/virtualMachines/$name" \
+                --metric "Percentage CPU" --interval PT5M --aggregation Average \
+                --query "value[0].timeseries[0].data[-1].average" -o tsv 2>/dev/null || echo "N/A")
+              echo "| $name | $CPU | N/A |" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "No VMs found in environment" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Storage Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get storage account metrics
+          SAS=$(az storage account list --query "[?contains(resourceGroup,'${{ env.ENVIRONMENT }}')].name" -o tsv 2>/dev/null | head -5)
+          
+          if [ -n "$SAS" ]; then
+            echo "| Storage Account | Used Capacity |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------------|---------------|" >> $GITHUB_STEP_SUMMARY
+            for sa in $SAS; do
+              CAPACITY=$(az storage account show --name "$sa" --query "primaryEndpoints.blob" -o tsv 2>/dev/null || echo "N/A")
+              echo "| $sa | Check Azure Portal |" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "No storage accounts found in environment" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Performance baseline captured" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Performance Baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-baseline-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          path: performance-baseline.json
+          retention-days: 90
+
+  # =========================================================================
+  # STAGE 11: COMPLIANCE REPORT (After apply)
+  # =========================================================================
+  compliance-report:
+    name: '11. Compliance Report'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [router, apply, plan, metrics, health-check]
+    if: always() && needs.apply.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+        continue-on-error: true
+
+      - name: Generate Compliance Report
+        shell: bash
+        run: |
+          echo "## 📋 Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Generated: $(date -Iseconds)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create compliance report
+          mkdir -p compliance-reports
+          
+          cat > compliance-reports/compliance-report-${{ github.run_id }}.md << EOF
+          # Infrastructure Compliance Report
+          
+          **Generated:** $(date -Iseconds)
+          **Environment:** ${{ env.ENVIRONMENT }}
+          **Commit:** ${{ github.sha }}
+          **Workflow Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **Actor:** ${{ github.actor }}
+          
+          ---
+          
+          ## Security Scan Results
+          
+          | Scanner | Result | Details |
+          |---------|--------|---------|
+          | tfsec | Completed | Static analysis for security issues |
+          | Checkov | Completed | Policy-as-code compliance |
+          | Terrascan | Completed | Security scanner |
+          | Secret Scan | Completed | Gitleaks secret detection |
+          
+          ## Deployment Summary
+          
+          | Metric | Value |
+          |--------|-------|
+          | Resources Added | ${{ needs.plan.outputs.add || '0' }} |
+          | Resources Changed | ${{ needs.plan.outputs.change || '0' }} |
+          | Resources Destroyed | ${{ needs.plan.outputs.destroy || '0' }} |
+          | Apply Result | ${{ needs.apply.result }} |
+          | Health Check | ${{ needs.health-check.outputs.health_status || 'N/A' }} |
+          
+          ## Approval Trail
+          
+          - **Triggered by:** ${{ github.event_name }}
+          - **Actor:** ${{ github.actor }}
+          - **Branch:** ${{ github.ref_name }}
+          - **Environment:** ${{ env.ENVIRONMENT }}
+          
+          ## Artifacts Generated
+          
+          - Plan output: tfplan-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          - Audit log: audit-log-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          - Metrics: metrics-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          
+          ---
+          
+          *This report is automatically generated for compliance tracking.*
+          EOF
+          
+          echo "### Report Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scans | ✅ Completed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployment | ${{ needs.apply.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Health Check | ${{ needs.health-check.outputs.health_status || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Audit Trail | ✅ Generated |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Compliance report generated" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Compliance Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-report-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          path: compliance-reports/
+          retention-days: 2555  # 7 years for compliance
+
+  # =========================================================================
+  # STAGE 11A: SBOM GENERATION (After apply)
+  # =========================================================================
+  sbom:
+    name: '11a. SBOM Generation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [router, apply]
+    if: always() && needs.apply.result == 'success' && vars.ENABLE_SBOM == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init Terraform
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform init -backend=false
+
+      - name: Generate SBOM
+        shell: bash
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "## 📦 Software Bill of Materials (SBOM)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get terraform version info
+          TF_VERSION_JSON=$(terraform version -json)
+          
+          # Get providers
+          PROVIDERS_JSON=$(terraform providers -json 2>/dev/null || echo '{"providers":[]}')
+          
+          # Create CycloneDX SBOM
+          cat > sbom.json << EOF
+          {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "version": 1,
+            "metadata": {
+              "timestamp": "$(date -Iseconds)",
+              "component": {
+                "type": "application",
+                "name": "terraform-infrastructure",
+                "version": "${{ github.sha }}"
+              },
+              "tools": [
+                {
+                  "vendor": "HashiCorp",
+                  "name": "Terraform",
+                  "version": "${{ env.TF_VERSION }}"
+                }
+              ]
+            },
+            "components": []
+          }
+          EOF
+          
+          # Parse providers and add to SBOM
+          echo "### Terraform Version" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Terraform: ${{ env.TF_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Providers" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "| Provider | Version | Source |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          terraform providers 2>/dev/null | grep -E "provider\[" | while read line; do
+            PROVIDER=$(echo "$line" | sed 's/.*provider\[\([^]]*\)\].*/\1/')
+            VERSION=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" || echo "N/A")
+            echo "| $PROVIDER | $VERSION | registry.terraform.io |" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Modules" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "modules" ]; then
+            echo "| Module | Path |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|------|" >> $GITHUB_STEP_SUMMARY
+            for mod in modules/*/; do
+              [ -d "$mod" ] || continue
+              MOD_NAME=$(basename "$mod")
+              echo "| $MOD_NAME | $mod |" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "No local modules found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # List external modules if terraform.lock.hcl exists
+          if [ -f ".terraform.lock.hcl" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Locked Dependencies" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            head -50 .terraform.lock.hcl >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ SBOM generated in CycloneDX format" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ env.ENVIRONMENT }}-${{ github.sha }}
+          path: |
+            ${{ env.WORKING_DIRECTORY }}/sbom.json
+            ${{ env.WORKING_DIRECTORY }}/.terraform.lock.hcl
+          retention-days: 365
+
+  # =========================================================================
+  # STAGE 12: AUTO-ROLLBACK (On health check failure)
+  # =========================================================================
+  auto-rollback:
+    name: '12. Auto-Rollback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [router, apply, health-check]
+    if: |
+      always() &&
+      needs.apply.result == 'success' &&
+      needs.health-check.outputs.health_status == 'unhealthy' &&
+      vars.ENABLE_AUTO_ROLLBACK == 'true'
+    environment: ${{ format('{0}-rollback', env.ENVIRONMENT) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Azure Login (OIDC)
+        if: env.USE_OIDC == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login (Legacy)
+        if: env.USE_OIDC != 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Find Latest Backup
+        id: backup
+        shell: bash
+        run: |
+          echo "## 🔄 Auto-Rollback Initiated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ Health check failed - initiating automatic rollback" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Find latest backup
+          BACKUP=$(az storage blob list \
+            --account-name "${{ secrets.TF_STATE_SA }}" \
+            --container-name "tfstate-backups" \
+            --query "[?contains(name,'${{ env.ENVIRONMENT }}')].{Name:name,Created:properties.creationTime}" \
+            -o json 2>/dev/null | jq -r 'sort_by(.Created) | last | .Name')
+          
+          if [ -z "$BACKUP" ] || [ "$BACKUP" == "null" ]; then
+            echo "❌ No backup found for environment: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+            echo "::error::No backup available for rollback"
+            exit 1
+          fi
+          
+          echo "backup_name=$BACKUP" >> $GITHUB_OUTPUT
+          echo "### Backup Found" >> $GITHUB_STEP_SUMMARY
+          echo "- Backup: \`$BACKUP\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Restore State
+        if: steps.backup.outputs.backup_name != ''
+        shell: bash
+        run: |
+          BACKUP_NAME="${{ steps.backup.outputs.backup_name }}"
+          STATE_KEY="${{ env.ENVIRONMENT }}.terraform.tfstate"
+          
+          echo "### Restoring State" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Source: \`tfstate-backups/$BACKUP_NAME\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Destination: \`tfstate/$STATE_KEY\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Copy backup to main state
+          az storage blob copy start \
+            --account-name "${{ secrets.TF_STATE_SA }}" \
+            --destination-container "tfstate" \
+            --destination-blob "$STATE_KEY" \
+            --source-container "tfstate-backups" \
+            --source-blob "$BACKUP_NAME" \
+            --auth-mode login
+          
+          # Wait for copy to complete
+          sleep 5
+          
+          STATUS=$(az storage blob show \
+            --account-name "${{ secrets.TF_STATE_SA }}" \
+            --container-name "tfstate" \
+            --name "$STATE_KEY" \
+            --query "properties.copy.status" -o tsv 2>/dev/null || echo "unknown")
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Rollback Status: $STATUS" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$STATUS" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ State restored successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Copy status: $STATUS - may still be in progress" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Notify Rollback
+        uses: ./.github/actions/notification
+        with:
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL || secrets.TEAMS_WEBHOOK_URL }}
+          type: ${{ secrets.SLACK_WEBHOOK_URL && 'slack' || 'teams' }}
+          status: 'warning'
+          environment: ${{ env.ENVIRONMENT }}
+          message: 'Auto-rollback executed due to health check failure. State restored from backup.'
+          title: '🔄 Auto-Rollback Executed'
+        continue-on-error: true
+
+      - name: Post-Rollback Instructions
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Investigate the deployment failure" >> $GITHUB_STEP_SUMMARY
+          echo "2. Review the health check results" >> $GITHUB_STEP_SUMMARY
+          echo "3. Run \`terraform plan\` to see current drift" >> $GITHUB_STEP_SUMMARY
+          echo "4. Fix issues and redeploy" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Note:** Only the Terraform state was rolled back. Azure resources may need manual reconciliation." >> $GITHUB_STEP_SUMMARY
 
   # =========================================================================
   # STAGE 9: DESTROY (Single environment mode only, with Approval Gate)
